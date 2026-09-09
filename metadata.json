@@ -1,0 +1,6 @@
+{
+  "name": "MalluCupid",
+  "description": "MalluCupid dating app for Kerala singles",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

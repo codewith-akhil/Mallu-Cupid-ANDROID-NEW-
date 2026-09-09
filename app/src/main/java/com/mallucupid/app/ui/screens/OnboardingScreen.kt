@@ -1,0 +1,1640 @@
+package com.mallucupid.app.ui.screens
+
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.location.Geocoder
+import android.location.Location
+import android.location.LocationManager
+import android.net.Uri
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.*
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import coil.compose.AsyncImage
+import com.mallucupid.app.data.OnboardingDraft
+import com.mallucupid.app.data.PromptItem
+import com.mallucupid.app.data.SampleProfiles
+import com.mallucupid.app.ui.theme.*
+
+private const val TOTAL_STEPS = 9
+
+private val interestOptions = listOf(
+    "Foodie", "Travel", "Movies", "Music", "Fitness", "Reading",
+    "Cooking", "Beach days", "Family time"
+)
+
+private val goalOptions = listOf(
+    "Something serious", "Marriage-minded", "Open to seeing where it goes", "New connections"
+)
+
+private val promptOptions = listOf(
+    "A perfect Sunday looks like...",
+    "The quickest way to my heart is...",
+    "I will never say no to...",
+    "A non-negotiable for me is..."
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun OnboardingScreen(
+    initialDraft: OnboardingDraft = OnboardingDraft(),
+    onComplete: (OnboardingDraft) -> Unit,
+    onBack: () -> Unit
+) {
+    var step by remember { mutableIntStateOf(1) }
+    var draft by remember { mutableStateOf(initialDraft) }
+    var error by remember { mutableStateOf("") }
+    var isSaving by remember { mutableStateOf(false) }
+
+    val scrollState = rememberScrollState()
+
+    // Smooth animated progress
+    val animatedProgress by animateFloatAsState(
+        targetValue = step.toFloat() / TOTAL_STEPS.toFloat(),
+        animationSpec = tween(durationMillis = 300),
+        label = "progress"
+    )
+
+    fun validate(): String {
+        return when (step) {
+            1 -> if (draft.gender.isBlank() || draft.lookingFor.isBlank()) {
+                "Choose your identity and who you would like to meet."
+            } else ""
+            2 -> {
+                val age = draft.calculatedAge
+                if (draft.birthDay.isBlank() || draft.birthMonth.isBlank() || draft.birthYear.isBlank() || age < 18 || age > 100) {
+                    "You must be 18 or older to join."
+                } else ""
+            }
+            3 -> if (draft.city.trim().isBlank()) {
+                "Add your current city to continue."
+            } else ""
+            4 -> if (draft.photos.size < 3) {
+                "Add at least 3 photos. Your first impression matters."
+            } else ""
+            5 -> if (draft.bio.trim().length < 10) {
+                "Please add a short introduction about yourself (at least 10 characters)."
+            } else ""
+            6 -> if (draft.interests.size < 3) {
+                "Choose at least 3 interests."
+            } else ""
+            7 -> if (draft.goal.isBlank()) {
+                "Choose what you are looking for."
+            } else ""
+            8 -> if (draft.prompts.any { it.answer.trim().length < 3 }) {
+                "Answer both prompts so people can start a conversation."
+            } else ""
+            else -> ""
+        }
+    }
+
+    fun handleNext() {
+        val err = validate()
+        if (err.isNotBlank()) {
+            error = err
+            return
+        }
+        error = ""
+        if (step < TOTAL_STEPS) {
+            step++
+        } else {
+            isSaving = true
+            onComplete(draft)
+        }
+    }
+
+    fun handleBack() {
+        error = ""
+        if (step > 1) {
+            step--
+        } else {
+            onBack()
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(PrimaryRed, DarkMaroon)
+                )
+            )
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .imePadding()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .widthIn(max = 520.dp)
+                .align(Alignment.TopCenter)
+                .padding(horizontal = 24.dp)
+        ) {
+            // Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp, bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                IconButton(
+                    onClick = { handleBack() },
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = Color.White.copy(alpha = 0.9f)
+                    )
+                }
+
+                AsyncImage(
+                    model = "https://res.cloudinary.com/wxytzoo1/image/upload/v1788918988/Mallucupidlogo.png",
+                    contentDescription = "Mallu Cupid",
+                    modifier = Modifier
+                        .size(54.dp)
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
+
+                Text(
+                    text = "$step / $TOTAL_STEPS",
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            // Progress bar
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color.White.copy(alpha = 0.15f))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(animatedProgress)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(AccentPink, SoftPink)
+                            )
+                        )
+                )
+            }
+
+            // Scrollable Content
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(scrollState)
+                    .padding(top = 20.dp, bottom = 16.dp)
+            ) {
+                Text(
+                    text = "Let’s make your profile feel like you",
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                when (step) {
+                    1 -> Step1Gender(
+                        gender = draft.gender,
+                        onGenderChange = { draft = draft.copy(gender = it) },
+                        lookingFor = draft.lookingFor,
+                        onLookingForChange = { draft = draft.copy(lookingFor = it) }
+                    )
+                    2 -> Step2Birthday(
+                        day = draft.birthDay,
+                        month = draft.birthMonth,
+                        year = draft.birthYear,
+                        onDayChange = { draft = draft.copy(birthDay = it) },
+                        onMonthChange = { draft = draft.copy(birthMonth = it) },
+                        onYearChange = { draft = draft.copy(birthYear = it) },
+                        age = draft.calculatedAge
+                    )
+                    3 -> Step3Location(
+                        city = draft.city,
+                        onCityChange = { draft = draft.copy(city = it) },
+                        distance = draft.distance,
+                        onDistanceChange = { draft = draft.copy(distance = it) }
+                    )
+                    4 -> Step4Photos(
+                        photos = draft.photos,
+                        onPhotosChange = { draft = draft.copy(photos = it) }
+                    )
+                    5 -> Step5Basics(
+                        bio = draft.bio,
+                        onBioChange = { draft = draft.copy(bio = it) }
+                    )
+                    6 -> Step6Interests(
+                        selectedInterests = draft.interests,
+                        onToggle = { interest ->
+                            val current = draft.interests
+                            val updated = if (current.contains(interest)) {
+                                current - interest
+                            } else {
+                                current + interest
+                            }
+                            draft = draft.copy(interests = updated)
+                        }
+                    )
+                    7 -> Step7Goal(
+                        selectedGoal = draft.goal,
+                        onGoalChange = { draft = draft.copy(goal = it) }
+                    )
+                    8 -> Step8Prompts(
+                        prompts = draft.prompts,
+                        onPromptQuestionChange = { index, question ->
+                            val updated = draft.prompts.toMutableList()
+                            if (index < updated.size) {
+                                updated[index] = updated[index].copy(question = question)
+                                draft = draft.copy(prompts = updated)
+                            }
+                        },
+                        onPromptAnswerChange = { index, answer ->
+                            val updated = draft.prompts.toMutableList()
+                            if (index < updated.size) {
+                                updated[index] = updated[index].copy(answer = answer)
+                                draft = draft.copy(prompts = updated)
+                            }
+                        }
+                    )
+                    9 -> Step9Preferences(
+                        ageMin = draft.ageMin,
+                        ageMax = draft.ageMax,
+                        onAgeChange = { min, max ->
+                            draft = draft.copy(ageMin = min, ageMax = max)
+                        },
+                        dealBreakers = draft.dealBreakers,
+                        onToggleDealBreaker = { item ->
+                            val current = draft.dealBreakers
+                            val updated = if (current.contains(item)) {
+                                current - item
+                            } else {
+                                current + item
+                            }
+                            draft = draft.copy(dealBreakers = updated)
+                        }
+                    )
+                }
+
+                if (error.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Surface(
+                        color = AccentPink.copy(alpha = 0.2f),
+                        border = BorderStroke(1.dp, AccentPink.copy(alpha = 0.6f)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = error,
+                            color = SoftPink,
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                        )
+                    }
+                }
+            }
+
+            // Bottom Actions Bar
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Button(
+                    onClick = { handleNext() },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp),
+                    shape = RoundedCornerShape(50),
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentPink),
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 8.dp),
+                    enabled = !isSaving
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            text = if (step < TOTAL_STEPS) "Continue" else if (isSaving) "Saving profile..." else "Finish my profile",
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+
+                if (step == 9) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(
+                        onClick = { onComplete(draft) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Skip for now",
+                            color = SoftPink,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// -------------------------------------------------------------
+// STEP 1: GENDER & WHO TO MEET (DROPDOWN SELECTIONS)
+// -------------------------------------------------------------
+@Composable
+private fun Step1Gender(
+    gender: String,
+    onGenderChange: (String) -> Unit,
+    lookingFor: String,
+    onLookingForChange: (String) -> Unit
+) {
+    val identityOptions = listOf("Man", "Woman", "Transman", "Transwoman", "Non-binary")
+    val meetOptions = listOf("Men", "Women", "Transmen", "Transwomen", "Non-binary", "Everyone")
+
+    var genderDropdownExpanded by remember { mutableStateOf(false) }
+    var meetDropdownExpanded by remember { mutableStateOf(false) }
+
+    Column {
+        Text(
+            text = "Who are you?",
+            color = Color.White,
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Identity Dropdown Selector
+        Box(modifier = Modifier.fillMaxWidth()) {
+            Surface(
+                onClick = { genderDropdownExpanded = true },
+                shape = RoundedCornerShape(16.dp),
+                color = if (gender.isNotBlank()) AccentPink.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.12f),
+                border = BorderStroke(
+                    1.5.dp,
+                    if (gender.isNotBlank()) AccentPink else Color.White.copy(alpha = 0.2f)
+                ),
+                modifier = Modifier.fillMaxWidth().height(58.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 18.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (gender.isNotBlank()) gender else "Select your identity",
+                        color = if (gender.isNotBlank()) Color.White else Color.White.copy(alpha = 0.6f),
+                        fontSize = 16.sp,
+                        fontWeight = if (gender.isNotBlank()) FontWeight.SemiBold else FontWeight.Normal
+                    )
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowDown,
+                        contentDescription = "Select Identity",
+                        tint = if (gender.isNotBlank()) SoftPink else Color.White.copy(alpha = 0.7f)
+                    )
+                }
+            }
+
+            DropdownMenu(
+                expanded = genderDropdownExpanded,
+                onDismissRequest = { genderDropdownExpanded = false },
+                modifier = Modifier
+                    .fillMaxWidth(0.88f)
+                    .background(DarkMaroon)
+            ) {
+                identityOptions.forEach { option ->
+                    val isSelected = gender == option
+                    DropdownMenuItem(
+                        text = {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = option,
+                                    color = if (isSelected) SoftPink else Color.White,
+                                    fontSize = 15.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                )
+                                if (isSelected) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = null,
+                                        tint = AccentPink,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        },
+                        onClick = {
+                            onGenderChange(option)
+                            genderDropdownExpanded = false
+                        }
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Text(
+            text = "Who do you want to meet?",
+            color = Color.White,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Who to Meet Dropdown Selector
+        Box(modifier = Modifier.fillMaxWidth()) {
+            Surface(
+                onClick = { meetDropdownExpanded = true },
+                shape = RoundedCornerShape(16.dp),
+                color = if (lookingFor.isNotBlank()) AccentPink.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.12f),
+                border = BorderStroke(
+                    1.5.dp,
+                    if (lookingFor.isNotBlank()) AccentPink else Color.White.copy(alpha = 0.2f)
+                ),
+                modifier = Modifier.fillMaxWidth().height(58.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 18.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (lookingFor.isNotBlank()) lookingFor else "Select who you want to meet",
+                        color = if (lookingFor.isNotBlank()) Color.White else Color.White.copy(alpha = 0.6f),
+                        fontSize = 16.sp,
+                        fontWeight = if (lookingFor.isNotBlank()) FontWeight.SemiBold else FontWeight.Normal
+                    )
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowDown,
+                        contentDescription = "Select Who to Meet",
+                        tint = if (lookingFor.isNotBlank()) SoftPink else Color.White.copy(alpha = 0.7f)
+                    )
+                }
+            }
+
+            DropdownMenu(
+                expanded = meetDropdownExpanded,
+                onDismissRequest = { meetDropdownExpanded = false },
+                modifier = Modifier
+                    .fillMaxWidth(0.88f)
+                    .background(DarkMaroon)
+            ) {
+                meetOptions.forEach { option ->
+                    val isSelected = lookingFor == option
+                    DropdownMenuItem(
+                        text = {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = option,
+                                    color = if (isSelected) SoftPink else Color.White,
+                                    fontSize = 15.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                )
+                                if (isSelected) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = null,
+                                        tint = AccentPink,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        },
+                        onClick = {
+                            onLookingForChange(option)
+                            meetDropdownExpanded = false
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChoiceCard(
+    label: String,
+    isSelected: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(16.dp),
+        color = if (isSelected) AccentPink.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.1f),
+        border = BorderStroke(
+            2.dp,
+            if (isSelected) AccentPink else Color.Transparent
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = label,
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
+            )
+            Text(
+                text = if (isSelected) "✓" else "○",
+                color = if (isSelected) SoftPink else Color.White.copy(alpha = 0.65f),
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+// -------------------------------------------------------------
+// STEP 2: BIRTHDAY
+// -------------------------------------------------------------
+@Composable
+private fun Step2Birthday(
+    day: String,
+    month: String,
+    year: String,
+    onDayChange: (String) -> Unit,
+    onMonthChange: (String) -> Unit,
+    onYearChange: (String) -> Unit,
+    age: Int
+) {
+    Column {
+        Text(
+            text = "When’s your birthday?",
+            color = Color.White,
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "We use this to show you age-appropriate matches. Your full birthday stays private.",
+            color = Color.White.copy(alpha = 0.85f),
+            fontSize = 15.sp,
+            lineHeight = 22.sp
+        )
+        Spacer(modifier = Modifier.height(28.dp))
+
+        Text(
+            text = "Date of birth",
+            color = Color.White.copy(alpha = 0.9f),
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            OutlinedTextField(
+                value = day,
+                onValueChange = { if (it.length <= 2 && it.all { c -> c.isDigit() }) onDayChange(it) },
+                placeholder = { Text("DD", color = Color.White.copy(alpha = 0.5f), textAlign = TextAlign.Center) },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                shape = RoundedCornerShape(14.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = Color.White.copy(alpha = 0.14f),
+                    unfocusedContainerColor = Color.White.copy(alpha = 0.12f),
+                    focusedBorderColor = AccentPink,
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White
+                ),
+                textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center, fontSize = 17.sp)
+            )
+
+            OutlinedTextField(
+                value = month,
+                onValueChange = { if (it.length <= 2 && it.all { c -> c.isDigit() }) onMonthChange(it) },
+                placeholder = { Text("MM", color = Color.White.copy(alpha = 0.5f), textAlign = TextAlign.Center) },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                shape = RoundedCornerShape(14.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = Color.White.copy(alpha = 0.14f),
+                    unfocusedContainerColor = Color.White.copy(alpha = 0.12f),
+                    focusedBorderColor = AccentPink,
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White
+                ),
+                textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center, fontSize = 17.sp)
+            )
+
+            OutlinedTextField(
+                value = year,
+                onValueChange = { if (it.length <= 4 && it.all { c -> c.isDigit() }) onYearChange(it) },
+                placeholder = { Text("YYYY", color = Color.White.copy(alpha = 0.5f), textAlign = TextAlign.Center) },
+                modifier = Modifier.weight(1.4f),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                shape = RoundedCornerShape(14.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = Color.White.copy(alpha = 0.14f),
+                    unfocusedContainerColor = Color.White.copy(alpha = 0.12f),
+                    focusedBorderColor = AccentPink,
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White
+                ),
+                textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center, fontSize = 17.sp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        if (year.length == 4) {
+            Surface(
+                shape = RoundedCornerShape(50),
+                color = Color.White.copy(alpha = 0.12f),
+                modifier = Modifier.align(Alignment.Start)
+            ) {
+                Text(
+                    text = if (age >= 18) "Age: $age years old (Eligible)" else "Age: $age (Must be 18+)",
+                    color = if (age >= 18) Color.White else SoftPink,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                )
+            }
+        }
+    }
+}
+
+// -------------------------------------------------------------
+// STEP 3: LOCATION & DISTANCE (MATCHING ATTACHED SCREENSHOT)
+// -------------------------------------------------------------
+@Composable
+private fun Step3Location(
+    city: String,
+    onCityChange: (String) -> Unit,
+    distance: Int,
+    onDistanceChange: (Int) -> Unit
+) {
+    val context = LocalContext.current
+    var isLocating by remember { mutableStateOf(false) }
+
+    fun fetchDeviceLocation() {
+        isLocating = true
+        try {
+            val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+            if (locationManager == null) {
+                onCityChange("Ukiah, California, United States")
+                isLocating = false
+                return
+            }
+
+            val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+            if (!hasFine && !hasCoarse) {
+                onCityChange("Ukiah, California, United States")
+                isLocating = false
+                return
+            }
+
+            val location: Location? = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                ?: locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                ?: locationManager.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER)
+
+            if (location != null) {
+                val geocoder = Geocoder(context, java.util.Locale.getDefault())
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    geocoder.getFromLocation(location.latitude, location.longitude, 1) { addresses ->
+                        val address = addresses.firstOrNull()
+                        val cityName = address?.locality ?: address?.subAdminArea ?: address?.subLocality ?: "Ukiah"
+                        val stateName = address?.adminArea ?: "California"
+                        val countryName = address?.countryName ?: "United States"
+                        val fullLocation = "$cityName, $stateName, $countryName"
+                        onCityChange(fullLocation)
+                        isLocating = false
+                    }
+                } else {
+                    @Suppress("DEPRECATION")
+                    val addresses = geocoder.getFromLocation(location.latitude, location.longitude, 1)
+                    val address = addresses?.firstOrNull()
+                    val cityName = address?.locality ?: address?.subAdminArea ?: address?.subLocality ?: "Ukiah"
+                    val stateName = address?.adminArea ?: "California"
+                    val countryName = address?.countryName ?: "United States"
+                    val fullLocation = "$cityName, $stateName, $countryName"
+                    onCityChange(fullLocation)
+                    isLocating = false
+                }
+            } else {
+                onCityChange("Ukiah, California, United States")
+                isLocating = false
+            }
+        } catch (e: Exception) {
+            onCityChange("Ukiah, California, United States")
+            isLocating = false
+        }
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                      permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (granted) {
+            fetchDeviceLocation()
+        } else {
+            isLocating = false
+        }
+    }
+
+    Column {
+        Text(
+            text = "Where are you based?",
+            color = Color.White,
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "We’ll use your location to introduce you to people nearby.",
+            color = Color.White.copy(alpha = 0.85f),
+            fontSize = 15.sp,
+            lineHeight = 22.sp
+        )
+        Spacer(modifier = Modifier.height(28.dp))
+
+        // Your location label
+        Text(
+            text = "Your location",
+            color = Color.White,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Location Card Container with Place icon, TextField, and MyLocation Crosshair
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = Color.White.copy(alpha = 0.08f),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(62.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Place,
+                    contentDescription = "Location",
+                    tint = AccentPink,
+                    modifier = Modifier.size(24.dp)
+                )
+
+                BasicTextField(
+                    value = city,
+                    onValueChange = onCityChange,
+                    textStyle = TextStyle(
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Normal
+                    ),
+                    singleLine = true,
+                    cursorBrush = SolidColor(AccentPink),
+                    decorationBox = { innerTextField ->
+                        if (city.isEmpty()) {
+                            Text(
+                                text = "City, State, Country",
+                                color = Color.White.copy(alpha = 0.5f),
+                                fontSize = 15.sp
+                            )
+                        }
+                        innerTextField()
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 12.dp)
+                )
+
+                if (isLocating) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        color = AccentPink,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    IconButton(
+                        onClick = {
+                            permissionLauncher.launch(
+                                arrayOf(
+                                    Manifest.permission.ACCESS_FINE_LOCATION,
+                                    Manifest.permission.ACCESS_COARSE_LOCATION
+                                )
+                            )
+                        },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MyLocation,
+                            contentDescription = "Tap the icon to use your current location",
+                            tint = AccentPink,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "Tap the icon to use your current location",
+            color = Color.White.copy(alpha = 0.65f),
+            fontSize = 13.sp
+        )
+
+        Spacer(modifier = Modifier.height(36.dp))
+
+        // Maximum Distance Section
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Maximum distance",
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = "$distance km",
+                color = AccentPink,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Slider(
+            value = distance.toFloat(),
+            onValueChange = { onDistanceChange(it.toInt()) },
+            valueRange = 5f..200f,
+            colors = SliderDefaults.colors(
+                thumbColor = Color.White,
+                activeTrackColor = AccentPink,
+                inactiveTrackColor = Color.White.copy(alpha = 0.25f),
+                activeTickColor = Color.Transparent,
+                inactiveTickColor = Color.Transparent
+            ),
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("5 km", color = Color.White.copy(alpha = 0.65f), fontSize = 13.sp)
+            Text("200 km", color = Color.White.copy(alpha = 0.65f), fontSize = 13.sp)
+        }
+    }
+}
+
+// -------------------------------------------------------------
+// STEP 4: PHOTOS
+// -------------------------------------------------------------
+@Composable
+private fun Step4Photos(
+    photos: List<String>,
+    onPhotosChange: (List<String>) -> Unit
+) {
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 6)
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            val stringUris = uris.map { it.toString() }
+            val merged = (photos + stringUris).distinct().take(6)
+            onPhotosChange(merged)
+        }
+    }
+
+    Column {
+        Text(
+            text = "Show your best side.",
+            color = Color.White,
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "Add at least 3 photos. Profiles with 4 or more get more meaningful conversations.",
+            color = Color.White.copy(alpha = 0.85f),
+            fontSize = 15.sp,
+            lineHeight = 22.sp
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // 3-column photo grid
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            val totalSlots = 6
+            for (row in 0 until 2) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    for (col in 0 until 3) {
+                        val index = row * 3 + col
+                        val photoUrl = photos.getOrNull(index)
+
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .aspectRatio(0.82f)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(Color.White.copy(alpha = 0.1f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (photoUrl != null) {
+                                AsyncImage(
+                                    model = photoUrl,
+                                    contentDescription = "Photo ${index + 1}",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+
+                                // Main badge or number
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color.Black.copy(alpha = 0.72f),
+                                    modifier = Modifier
+                                        .align(Alignment.BottomStart)
+                                        .padding(7.dp)
+                                ) {
+                                    Text(
+                                        text = if (index == 0) "Main" else "${index + 1}",
+                                        color = Color.White,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                    )
+                                }
+
+                                // Remove button
+                                IconButton(
+                                    onClick = {
+                                        val updated = photos.toMutableList()
+                                        updated.removeAt(index)
+                                        onPhotosChange(updated)
+                                    },
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .size(28.dp)
+                                        .padding(4.dp)
+                                ) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = Color.Black.copy(alpha = 0.6f)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "Remove photo",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(16.dp).padding(2.dp)
+                                        )
+                                    }
+                                }
+                            } else if (index == photos.size) {
+                                // Upload tile
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .clickable {
+                                            photoPickerLauncher.launch(
+                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                            )
+                                        }
+                                        .padding(6.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Text(
+                                        text = "+",
+                                        color = SoftPink,
+                                        fontSize = 28.sp,
+                                        fontWeight = FontWeight.Light
+                                    )
+                                    Text(
+                                        text = "Add photo",
+                                        color = SoftPink,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            } else {
+                                Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "${index + 1}",
+                                        color = Color.White.copy(alpha = 0.25f),
+                                        fontSize = 14.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "${photos.size} of 3 minimum photos added",
+                color = if (photos.size >= 3) Color.White.copy(alpha = 0.85f) else SoftPink,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium
+            )
+
+            // Quick add sample photo button for testing
+            TextButton(
+                onClick = {
+                    val available = SampleProfiles.samplePhotoPool.filter { !photos.contains(it) }
+                    if (available.isNotEmpty()) {
+                        onPhotosChange(photos + available.first())
+                    }
+                },
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = "+ Sample Photo",
+                    color = SoftPink,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+    }
+}
+
+// -------------------------------------------------------------
+// STEP 5: THE BASICS (BIO)
+// -------------------------------------------------------------
+@Composable
+private fun Step5Basics(
+    bio: String,
+    onBioChange: (String) -> Unit
+) {
+    Column {
+        Text(
+            text = "The basics.",
+            color = Color.White,
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "A little detail helps people find a genuine connection.",
+            color = Color.White.copy(alpha = 0.85f),
+            fontSize = 15.sp,
+            lineHeight = 22.sp
+        )
+        Spacer(modifier = Modifier.height(28.dp))
+
+        Text(
+            text = "A few words about you",
+            color = Color.White,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = Color.White.copy(alpha = 0.08f),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            BasicTextField(
+                value = bio,
+                onValueChange = { if (it.length <= 180) onBioChange(it) },
+                textStyle = TextStyle(
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    lineHeight = 22.sp
+                ),
+                cursorBrush = SolidColor(AccentPink),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 125.dp)
+                    .padding(16.dp),
+                decorationBox = { innerTextField ->
+                    if (bio.isEmpty()) {
+                        Text(
+                            text = "Software engineer who loves weekend road trips to Munnar, filter coffee, and acoustic Malayalam melodies.",
+                            color = Color.White.copy(alpha = 0.45f),
+                            fontSize = 15.sp,
+                            lineHeight = 22.sp
+                        )
+                    }
+                    innerTextField()
+                }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "${bio.length} / 180",
+            color = Color.White.copy(alpha = 0.65f),
+            fontSize = 13.sp,
+            modifier = Modifier.align(Alignment.End)
+        )
+    }
+}
+
+// -------------------------------------------------------------
+// STEP 6: INTERESTS
+// -------------------------------------------------------------
+@Composable
+private fun Step6Interests(
+    selectedInterests: List<String>,
+    onToggle: (String) -> Unit
+) {
+    Column {
+        Text(
+            text = "What makes you, you?",
+            color = Color.White,
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "Pick at least 3. These become easy conversation starters.",
+            color = Color.White.copy(alpha = 0.85f),
+            fontSize = 15.sp,
+            lineHeight = 22.sp
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Chip flow layout
+        val chunkedInterests = interestOptions.chunked(3)
+        chunkedInterests.forEach { rowItems ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                rowItems.forEach { interest ->
+                    val isSelected = selectedInterests.contains(interest)
+                    Surface(
+                        onClick = { onToggle(interest) },
+                        shape = RoundedCornerShape(50),
+                        color = if (isSelected) AccentPink else Color.White.copy(alpha = 0.1f),
+                        border = BorderStroke(
+                            1.5.dp,
+                            if (isSelected) AccentPink else Color.Transparent
+                        ),
+                        modifier = Modifier.padding(vertical = 2.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+                        ) {
+                            Text(
+                                text = interest,
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
+                            )
+                            if (isSelected) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = "${selectedInterests.size} selected (minimum 3)",
+            color = if (selectedInterests.size >= 3) Color.White.copy(alpha = 0.85f) else SoftPink,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+// -------------------------------------------------------------
+// STEP 7: GOALS
+// -------------------------------------------------------------
+@Composable
+private fun Step7Goal(
+    selectedGoal: String,
+    onGoalChange: (String) -> Unit
+) {
+    Column {
+        Text(
+            text = "What are you looking for?",
+            color = Color.White,
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "There’s no wrong answer. Being clear helps everyone.",
+            color = Color.White.copy(alpha = 0.85f),
+            fontSize = 15.sp,
+            lineHeight = 22.sp
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+
+        goalOptions.forEach { goal ->
+            ChoiceCard(
+                label = goal,
+                isSelected = selectedGoal == goal,
+                onClick = { onGoalChange(goal) }
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+    }
+}
+
+// -------------------------------------------------------------
+// STEP 8: PROMPTS
+// -------------------------------------------------------------
+@Composable
+private fun Step8Prompts(
+    prompts: List<PromptItem>,
+    onPromptQuestionChange: (Int, String) -> Unit,
+    onPromptAnswerChange: (Int, String) -> Unit
+) {
+    Column {
+        Text(
+            text = "Give them a way in.",
+            color = Color.White,
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "Answer two quick prompts in your own words.",
+            color = Color.White.copy(alpha = 0.85f),
+            fontSize = 15.sp,
+            lineHeight = 22.sp
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+
+        prompts.forEachIndexed { index, prompt ->
+            var expandedDropdown by remember { mutableStateOf(false) }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 20.dp)
+            ) {
+                Text(
+                    text = "Prompt ${index + 1}",
+                    color = Color.White.copy(alpha = 0.9f),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Box {
+                    Surface(
+                        onClick = { expandedDropdown = true },
+                        shape = RoundedCornerShape(14.dp),
+                        color = Color.White.copy(alpha = 0.12f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = prompt.question,
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Icon(
+                                imageVector = Icons.Default.KeyboardArrowDown,
+                                contentDescription = null,
+                                tint = Color.White.copy(alpha = 0.7f)
+                            )
+                        }
+                    }
+
+                    DropdownMenu(
+                        expanded = expandedDropdown,
+                        onDismissRequest = { expandedDropdown = false },
+                        modifier = Modifier
+                            .fillMaxWidth(0.88f)
+                            .background(DarkMaroon)
+                    ) {
+                        promptOptions.forEach { opt ->
+                            DropdownMenuItem(
+                                text = { Text(opt, color = Color.White, fontSize = 14.sp) },
+                                onClick = {
+                                    onPromptQuestionChange(index, opt)
+                                    expandedDropdown = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = prompt.answer,
+                    onValueChange = { if (it.length <= 120) onPromptAnswerChange(index, it) },
+                    placeholder = { Text("Write your answer...", color = Color.White.copy(alpha = 0.55f)) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 80.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = Color.White.copy(alpha = 0.14f),
+                        unfocusedContainerColor = Color.White.copy(alpha = 0.12f),
+                        focusedBorderColor = AccentPink,
+                        unfocusedBorderColor = Color.Transparent,
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        cursorColor = AccentPink
+                    ),
+                    maxLines = 3
+                )
+            }
+        }
+    }
+}
+
+// -------------------------------------------------------------
+// STEP 9: FINE-TUNE PREFERENCES
+// -------------------------------------------------------------
+@Composable
+private fun Step9Preferences(
+    ageMin: Int,
+    ageMax: Int,
+    onAgeChange: (Int, Int) -> Unit,
+    dealBreakers: List<String>,
+    onToggleDealBreaker: (String) -> Unit
+) {
+    val dealBreakerOptions = listOf("Smoking", "Drinking", "Long distance", "Not family-oriented")
+
+    Column {
+        Surface(
+            shape = RoundedCornerShape(50),
+            color = SoftPink.copy(alpha = 0.2f),
+            modifier = Modifier.padding(bottom = 12.dp)
+        ) {
+            Text(
+                text = "OPTIONAL FOR NOW",
+                color = SoftPink,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+            )
+        }
+
+        Text(
+            text = "Fine-tune your matches.",
+            color = Color.White,
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "You can always adjust these later. We’ll keep the important stuff simple.",
+            color = Color.White.copy(alpha = 0.85f),
+            fontSize = 15.sp,
+            lineHeight = 22.sp
+        )
+        Spacer(modifier = Modifier.height(26.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Preferred age range",
+                color = Color.White.copy(alpha = 0.9f),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = "$ageMin – $ageMax",
+                color = SoftPink,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Age inputs row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = ageMin.toString(),
+                onValueChange = {
+                    val num = it.toIntOrNull() ?: 18
+                    onAgeChange(num.coerceIn(18, ageMax), ageMax)
+                },
+                modifier = Modifier.width(90.dp),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                shape = RoundedCornerShape(14.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = Color.White.copy(alpha = 0.14f),
+                    unfocusedContainerColor = Color.White.copy(alpha = 0.12f),
+                    focusedBorderColor = AccentPink,
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White
+                ),
+                textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center, fontSize = 16.sp)
+            )
+
+            Text("to", color = Color.White.copy(alpha = 0.7f), fontSize = 14.sp)
+
+            OutlinedTextField(
+                value = ageMax.toString(),
+                onValueChange = {
+                    val num = it.toIntOrNull() ?: 50
+                    onAgeChange(ageMin, num.coerceIn(ageMin, 80))
+                },
+                modifier = Modifier.width(90.dp),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                shape = RoundedCornerShape(14.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = Color.White.copy(alpha = 0.14f),
+                    unfocusedContainerColor = Color.White.copy(alpha = 0.12f),
+                    focusedBorderColor = AccentPink,
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White
+                ),
+                textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center, fontSize = 16.sp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(28.dp))
+
+        Text(
+            text = "Deal breakers",
+            color = Color.White.copy(alpha = 0.9f),
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            dealBreakerOptions.take(2).forEach { item ->
+                val isSelected = dealBreakers.contains(item)
+                Surface(
+                    onClick = { onToggleDealBreaker(item) },
+                    shape = RoundedCornerShape(50),
+                    color = if (isSelected) AccentPink else Color.White.copy(alpha = 0.1f),
+                    border = BorderStroke(1.dp, if (isSelected) AccentPink else Color.Transparent)
+                ) {
+                    Text(
+                        text = item,
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            dealBreakerOptions.drop(2).forEach { item ->
+                val isSelected = dealBreakers.contains(item)
+                Surface(
+                    onClick = { onToggleDealBreaker(item) },
+                    shape = RoundedCornerShape(50),
+                    color = if (isSelected) AccentPink else Color.White.copy(alpha = 0.1f),
+                    border = BorderStroke(1.dp, if (isSelected) AccentPink else Color.Transparent)
+                ) {
+                    Text(
+                        text = item,
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
+                    )
+                }
+            }
+        }
+    }
+}
