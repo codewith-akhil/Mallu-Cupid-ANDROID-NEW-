@@ -32,10 +32,13 @@ fun ProfileViewContent(
     userDraft: OnboardingDraft,
     onEditProfile: () -> Unit,
     onOpenSettings: () -> Unit,
-    onSignOut: () -> Unit
+    onSignOut: () -> Unit,
+    onOpenFaceVerification: () -> Unit = {},
+    onOpenPremiumFlow: () -> Unit = {},
+    onShowSystemScreen: ((String) -> Unit)? = null
 ) {
     val scrollState = rememberScrollState()
-    var subscriptionCardIndex by remember { mutableIntStateOf(0) } // 0: Plus, 1: Gold, 2: Platinum
+    var subscriptionCardIndex by remember { mutableIntStateOf(0) } // 0: Premium (₹49/wk), 1: Gold, 2: Platinum
     var showFeaturesModal by remember { mutableStateOf(false) }
 
     Column(
@@ -127,26 +130,56 @@ fun ProfileViewContent(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Edit Profile Button (Matches screenshot 12: rounded black pill)
-            Button(
-                onClick = onEditProfile,
-                shape = RoundedCornerShape(50),
-                colors = ButtonDefaults.buttonColors(containerColor = Color.Black),
-                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 10.dp)
+            // Action Buttons Row: Edit Profile + Verify Now
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = Icons.Default.Edit,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Edit profile",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
+                // Edit Profile Button (Matches screenshot 12: rounded black pill)
+                Button(
+                    onClick = onEditProfile,
+                    shape = RoundedCornerShape(50),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Black),
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Edit profile",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+
+                // Verify Now Button (Tinder style)
+                if (!userDraft.isVerified) {
+                    Button(
+                        onClick = onOpenFaceVerification,
+                        shape = RoundedCornerShape(50),
+                        colors = ButtonDefaults.buttonColors(containerColor = SuperBlue),
+                        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CameraAlt,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Verify Now",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+                }
             }
         }
 
@@ -224,9 +257,9 @@ fun ProfileViewContent(
             QuickUtilityCard(
                 iconText = "🔥",
                 title = "Subscriptions",
-                actionText = "",
+                actionText = "₹49/wk",
                 modifier = Modifier.weight(1f),
-                onClick = { showFeaturesModal = true }
+                onClick = onOpenPremiumFlow
             )
         }
 
@@ -240,13 +273,13 @@ fun ProfileViewContent(
         ) {
             when (subscriptionCardIndex) {
                 0 -> {
-                    // 1. Cupid Plus Card (Matches screenshot 12)
+                    // 1. Mallu Cupid Premium (₹49/wk)
                     SubscriptionBannerCard(
-                        tierName = "CUPID PLUS",
-                        flameColor = TinderCoral,
-                        gradientColors = listOf(Color(0xFF2C2E3B), Color(0xFF1E202B)),
-                        features = listOf("Unlimited Likes", "Unlimited Rewinds", "Passport to any location"),
-                        onUpgrade = { showFeaturesModal = true }
+                        tierName = "MALLU CUPID PREMIUM · ₹49/WK",
+                        flameColor = DashboardTerracotta,
+                        gradientColors = listOf(Color(0xFF38231C), Color(0xFF221612)),
+                        features = listOf("Unlimited Likes", "See Who Likes You", "Unlimited Chat", "Unlimited Rewind"),
+                        onUpgrade = onOpenPremiumFlow
                     )
                 }
 
@@ -257,7 +290,7 @@ fun ProfileViewContent(
                         flameColor = TinderGold,
                         gradientColors = listOf(Color(0xFFF59E0B), Color(0xFFB45309)),
                         features = listOf("See Who Likes You", "Top Picks daily", "Free Super Likes"),
-                        onUpgrade = { showFeaturesModal = true }
+                        onUpgrade = onOpenPremiumFlow
                     )
                 }
 
@@ -268,7 +301,7 @@ fun ProfileViewContent(
                         flameColor = Color(0xFF60A5FA),
                         gradientColors = listOf(Color(0xFF0F172A), Color(0xFF1E293B)),
                         features = listOf("Priority Likes", "Message Before Matching", "See Who Likes You"),
-                        onUpgrade = { showFeaturesModal = true }
+                        onUpgrade = onOpenPremiumFlow
                     )
                 }
             }
@@ -308,9 +341,64 @@ fun ProfileViewContent(
             textAlign = TextAlign.Center,
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { showFeaturesModal = true }
+                .clickable { onOpenPremiumFlow() }
                 .padding(vertical = 4.dp)
         )
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // System UI States Showcase (Loading, No Internet, Error)
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = TinderSurface,
+            border = BorderStroke(1.dp, TinderBorder),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Widgets, contentDescription = null, tint = DashboardPeach, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "System UI States Preview",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TinderTextPrimary
+                    )
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { onShowSystemScreen?.invoke("LOADING") },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp)
+                    ) {
+                        Text("Loading", fontSize = 12.sp)
+                    }
+                    OutlinedButton(
+                        onClick = { onShowSystemScreen?.invoke("NO_INTERNET") },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp)
+                    ) {
+                        Text("No Net", fontSize = 12.sp)
+                    }
+                    OutlinedButton(
+                        onClick = { onShowSystemScreen?.invoke("ERROR") },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp)
+                    ) {
+                        Text("Error", fontSize = 12.sp)
+                    }
+                }
+            }
+        }
 
         Spacer(modifier = Modifier.height(28.dp))
 

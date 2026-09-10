@@ -143,7 +143,92 @@ Faithfully implemented from Android reference specifications:
 
 ---
 
-## 4. Technology Stack & Dependencies
+## 4. Face Verification Architecture (`FaceVerificationScreen`)
+
+Faithfully implemented following the Tinder Photo Verification standard:
+- **Pose-Matching Liveness Verification**:
+  - Requires the user to capture two live selfies matching dynamic pose instructions:
+    1. **Pose 1**: Look directly into the camera and smile.
+    2. **Pose 2**: Tilt head slightly to the right side.
+- **Oval Guide Frame & Animated Scanning Reticle**:
+  - Displays a dedicated rounded oval face guide frame with laser scan line animation, corner brackets, and positioning guides.
+  - Leverages Android Camera Contract (`ActivityResultContracts.TakePicturePreview()`) with camera runtime permission request (`Manifest.permission.CAMERA`).
+  - Includes quick-simulation affordance for emulators lacking physical camera hardware.
+- **Multi-Phase Geometry & Anti-Spoofing Analysis**:
+  - Phase 1: Scanning 3D facial geometry.
+  - Phase 2: Validating liveness and anti-spoofing algorithms.
+  - Phase 3: Matching facial landmarks against the user's 6 uploaded Kerala dating photos.
+- **Verified Blue Checkmark Awarded**:
+  - Automatically activates `isVerified = true` in state upon successful match.
+  - Adds the glowing blue verified checkmark icon to the user's avatar, discovery card, and conversation threads.
+
+---
+
+## 5. Mallu Cupid Premium Subscription & Payment Gateway Flow (`PremiumSubscriptionFlow`)
+
+A complete 4-stage monetization and transaction workflow:
+
+### 5.1. Subscription Plan: ₹49 INR Per Week
+- **Special Kerala Launch Offer**: ₹49 per week with cancel-anytime flexibility.
+- **Core Value Propositions**:
+  - 💖 **Unlimited Likes**: Swipe without daily limits on singles across Kerala.
+  - 👀 **See Who Likes You**: Instantly unblur all inbound likes and match without waiting.
+  - 💬 **Unlimited Chat**: Message matches and share media without limits.
+  - ⏪ **Unlimited Rewinds**: Take back accidental left swipes anytime.
+
+### 5.2. Multi-Stage Payment Gateway Flow
+1. **Offer Screen (`OFFER`)**:
+   - High-contrast terracotta/gold brand card detailing the ₹49/week price tag, perk cards, and "Activate Now" CTA.
+2. **Indian Payment Gateway Screen (`PAYMENT_GATEWAY`)**:
+   - Order ID generation (`MC_PRM_...`) and order summary (₹49.00).
+   - Selection of popular Indian payment options: **Google Pay (UPI)**, **PhonePe**, **Paytm / Any UPI ID (VPA)**, **Debit/Credit Cards (RuPay, Visa, MasterCard)**.
+   - Live UPI ID input field with VPA validation.
+   - 256-Bit SSL Encrypted Indian Gateway security badge.
+3. **Payment Verification Screen (`PAYMENT_VERIFICATION`)**:
+   - Authentic banking processing screen with spinning rupee token.
+   - Step-by-step progress indicators: *"Requesting bank authorization..."* -> *"Verifying 256-bit token with NPCI..."* -> *"Authorizing ₹49.00 debit..."*.
+4. **Payment Success Screen (`PAYMENT_SUCCESS`)**:
+   - Green animated celebration checkmark.
+   - Transaction reference number (`TXN_UPI_MC_...`).
+   - Summary of unlocked premium perks with "Start Exploring with Premium" completion button.
+
+---
+
+## 6. System State Screens (`SystemStateScreens`)
+
+Dedicated, reusable screens ensuring resilient user experiences across all edge cases:
+
+- **Loading Screen (`LoadingStateScreen`)**:
+  - Animated pulsing Mallu Cupid logo with smooth dual-ring circular indicator.
+  - Displays culturally relevant Kerala dating tips and suggestions (*"Kochi cafes and Munnar photos get 3x more dates"*).
+- **No Internet Screen (`NoInternetScreen`)**:
+  - Distinctive offline indicator with Wi-Fi disconnected illustration.
+  - Interactive "Try Again" button with simulated connectivity check spinner and recovery toast.
+  - Optional "Continue Offline" fallback.
+- **Error Screen (`ErrorStateScreen`)**:
+  - Alert shield styling with clear error descriptions and one-tap recovery retry buttons.
+- **Success Screen (`SuccessStateScreen`)**:
+  - Celebratory confirmation screen with customizable titles, descriptions, and forward actions.
+- **Diagnostics Previewer**:
+  - Accessible directly in the Profile settings menu for one-tap live preview and testing of all system screens.
+
+---
+
+## 7. App Launcher Icon Configuration
+
+- **Branded Launcher Icon Asset**: Configured from official production asset:
+  - Source: `https://res.cloudinary.com/wxytzoo1/image/upload/v1788918988/MallucupidAppicon.png`
+  - High-resolution 512x512 PNG stored in `res/drawable/mallu_cupid_app_icon.png`.
+- **Adaptive Icon Layers**:
+  - `res/drawable/ic_launcher_foreground.xml`: Centered within 72dp safe zone canvas.
+  - `res/drawable/ic_launcher_background.xml`: Styled with Mallu Cupid signature terracotta gradient.
+- **Multi-Density Mipmaps**:
+  - Generated webp icons across `mdpi`, `hdpi`, `xhdpi`, `xxhdpi`, and `xxxhdpi` for both standard and round launcher icons.
+  - Manifest configured with `android:icon="@mipmap/ic_launcher"` and `android:roundIcon="@mipmap/ic_launcher_round"`.
+
+---
+
+## 8. Technology Stack & Dependencies
 
 - **Language**: Kotlin 2.0+
 - **UI Framework**: Jetpack Compose (BOM 2024.09.00)

@@ -47,10 +47,21 @@ fun AccountSettingsScreen(
     var draft by remember { mutableStateOf(initialDraft) }
 
     // Sub-screen navigation states
-    var currentSubView by remember { mutableStateOf("MAIN") } // "MAIN", "BLOCKED_USERS", "DELETE_ACCOUNT", "ACTIVE_STATUS", "EMAIL_SETTINGS", "PUSH_NOTIFICATIONS"
+    var currentSubView by remember { mutableStateOf("MAIN") } // "MAIN", "BLOCKED_USERS", "DELETE_ACCOUNT", "ACTIVE_STATUS", "EMAIL_SETTINGS", "PUSH_NOTIFICATIONS", "FACE_VERIFICATION"
     var userToUnblock by remember { mutableStateOf<BlockedUser?>(null) }
 
     when (currentSubView) {
+        "FACE_VERIFICATION" -> {
+            FaceVerificationScreen(
+                draft = draft,
+                onVerificationComplete = { updated ->
+                    draft = updated
+                    currentSubView = "MAIN"
+                },
+                onBack = { currentSubView = "MAIN" }
+            )
+        }
+
         "ACTIVE_STATUS" -> {
             ActiveStatusScreen(
                 draft = draft,
@@ -774,16 +785,35 @@ fun AccountSettingsScreen(
                                         }
                                     }
 
-                                    // Toggle for verification status demo
-                                    TextButton(
-                                        onClick = { draft = draft.copy(isVerified = !draft.isVerified) },
-                                        contentPadding = PaddingValues(horizontal = 8.dp)
-                                    ) {
-                                        Text(
-                                            text = if (draft.isVerified) "Switch to Unverified" else "Verify Now",
-                                            fontSize = 11.sp,
-                                            color = DashboardPeach
-                                        )
+                                    if (!draft.isVerified) {
+                                        Button(
+                                            onClick = { currentSubView = "FACE_VERIFICATION" },
+                                            colors = ButtonDefaults.buttonColors(containerColor = SuperBlue),
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(Icons.Default.CameraAlt, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                                                Spacer(modifier = Modifier.width(4.dp))
+                                                Text(
+                                                    text = "Verify Now",
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color.White
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        TextButton(
+                                            onClick = { currentSubView = "FACE_VERIFICATION" },
+                                            contentPadding = PaddingValues(horizontal = 8.dp)
+                                        ) {
+                                            Text(
+                                                text = "Re-verify Face",
+                                                fontSize = 11.sp,
+                                                color = DashboardPeach
+                                            )
+                                        }
                                     }
                                 }
                             }

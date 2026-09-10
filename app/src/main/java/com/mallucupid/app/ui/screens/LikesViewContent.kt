@@ -34,7 +34,8 @@ import com.mallucupid.app.ui.theme.*
 @Composable
 fun LikesViewContent(
     profiles: List<DatingProfile>,
-    onSelectProfile: (DatingProfile) -> Unit
+    onSelectProfile: (DatingProfile) -> Unit,
+    onUpgradeToPremium: () -> Unit = {}
 ) {
     var selectedLikesTab by remember { mutableStateOf(0) } // 0: 0 likes, 1: Likes sent, 2: Top Picks
     var showGoldModal by remember { mutableStateOf(false) }
@@ -168,18 +169,15 @@ fun LikesViewContent(
                         Spacer(modifier = Modifier.height(28.dp))
 
                         Button(
-                            onClick = {
-                                modalFeatureTitle = "Mallu Cupid Gold"
-                                showGoldModal = true
-                            },
+                            onClick = onUpgradeToPremium,
                             shape = RoundedCornerShape(50),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.Black),
+                            colors = ButtonDefaults.buttonColors(containerColor = DashboardTerracotta),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(50.dp)
                         ) {
                             Text(
-                                text = "See who likes you",
+                                text = "See who likes you · ₹49/week",
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White

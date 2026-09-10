@@ -55,6 +55,9 @@ fun DashboardScreen(
     var currentDraft by remember { mutableStateOf(userDraft) }
     var showEditProfileScreen by remember { mutableStateOf(false) }
     var showAccountSettingsScreen by remember { mutableStateOf(false) }
+    var showFaceVerificationScreen by remember { mutableStateOf(false) }
+    var showPremiumSubscriptionFlow by remember { mutableStateOf(false) }
+    var activeSystemScreen by remember { mutableStateOf<String?>(null) } // "LOADING", "NO_INTERNET", "ERROR"
     var expandedProfile by remember { mutableStateOf<DatingProfile?>(null) }
     var firstImpressionProfile by remember { mutableStateOf<DatingProfile?>(null) }
     var activeCategoryFilter by remember { mutableStateOf<String?>(null) }
@@ -126,6 +129,64 @@ fun DashboardScreen(
             }
         )
         return
+    }
+
+    if (showFaceVerificationScreen) {
+        FaceVerificationScreen(
+            draft = currentDraft,
+            onVerificationComplete = { verifiedDraft ->
+                currentDraft = verifiedDraft
+                showFaceVerificationScreen = false
+                actionToast = "Face Verified! Blue checkmark badge applied"
+            },
+            onBack = { showFaceVerificationScreen = false }
+        )
+        return
+    }
+
+    if (showPremiumSubscriptionFlow) {
+        PremiumSubscriptionFlow(
+            onSuccess = {
+                showPremiumSubscriptionFlow = false
+                actionToast = "Mallu Cupid Premium activated! Enjoy Unlimited Likes & Chats"
+            },
+            onBack = { showPremiumSubscriptionFlow = false }
+        )
+        return
+    }
+
+    if (activeSystemScreen != null) {
+        when (activeSystemScreen) {
+            "LOADING" -> {
+                LoadingStateScreen(
+                    message = "Connecting to singles in Kochi, Calicut & Trivandrum...",
+                    onCancel = { activeSystemScreen = null }
+                )
+                return
+            }
+            "NO_INTERNET" -> {
+                NoInternetScreen(
+                    onRetry = {
+                        activeSystemScreen = null
+                        actionToast = "Connected to Mallu Cupid!"
+                    },
+                    onOfflineMode = { activeSystemScreen = null }
+                )
+                return
+            }
+            "ERROR" -> {
+                ErrorStateScreen(
+                    title = "Connection Interrupted",
+                    message = "Could not sync your matches. Please check connection and try again.",
+                    onRetry = {
+                        activeSystemScreen = null
+                        actionToast = "Retried successfully"
+                    },
+                    onBack = { activeSystemScreen = null }
+                )
+                return
+            }
+        }
     }
 
     if (firstImpressionProfile != null) {
@@ -258,6 +319,9 @@ fun DashboardScreen(
                     profiles = profiles,
                     onSelectProfile = { p ->
                         expandedProfile = p
+                    },
+                    onUpgradeToPremium = {
+                        showPremiumSubscriptionFlow = true
                     }
                 )
             }
@@ -276,7 +340,10 @@ fun DashboardScreen(
                     userDraft = currentDraft,
                     onEditProfile = { showEditProfileScreen = true },
                     onOpenSettings = { showAccountSettingsScreen = true },
-                    onSignOut = onSignOut
+                    onSignOut = onSignOut,
+                    onOpenFaceVerification = { showFaceVerificationScreen = true },
+                    onOpenPremiumFlow = { showPremiumSubscriptionFlow = true },
+                    onShowSystemScreen = { screenType -> activeSystemScreen = screenType }
                 )
             }
         }
