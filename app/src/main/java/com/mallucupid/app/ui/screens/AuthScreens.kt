@@ -7,6 +7,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -18,6 +21,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -32,6 +36,10 @@ fun SignInScreen(
 ) {
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var emailError by remember { mutableStateOf(false) }
+    var emailErrorText by remember { mutableStateOf<String?>(null) }
+    var passwordError by remember { mutableStateOf(false) }
+    var passwordErrorText by remember { mutableStateOf<String?>(null) }
 
     AuthBackground {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -73,18 +81,34 @@ fun SignInScreen(
 
                 AuthTextField(
                     value = email,
-                    onValueChange = { email = it },
+                    onValueChange = {
+                        email = it
+                        if (emailError) {
+                            emailError = false
+                            emailErrorText = null
+                        }
+                    },
                     placeholder = "Email address",
-                    keyboardType = KeyboardType.Email
+                    keyboardType = KeyboardType.Email,
+                    isError = emailError,
+                    errorText = emailErrorText
                 )
 
                 Spacer(modifier = Modifier.height(if (isCompact) 10.dp else 16.dp))
 
                 AuthTextField(
                     value = password,
-                    onValueChange = { password = it },
+                    onValueChange = {
+                        password = it
+                        if (passwordError) {
+                            passwordError = false
+                            passwordErrorText = null
+                        }
+                    },
                     placeholder = "Password",
-                    isPassword = true
+                    isPassword = true,
+                    isError = passwordError,
+                    errorText = passwordErrorText
                 )
 
                 Spacer(modifier = Modifier.height(if (isCompact) 4.dp else 8.dp))
@@ -109,7 +133,13 @@ fun SignInScreen(
 
                 AuthButton(
                     text = "Sign In",
-                    onClick = onSignIn,
+                    onClick = {
+                        emailError = email.isNotEmpty() && !isValidEmail(email)
+                        emailErrorText = if (emailError) "Enter a valid email address" else null
+                        passwordError = password.length < 6
+                        passwordErrorText = if (passwordError) "Minimum 6 characters" else null
+                        if (!emailError && !passwordError) onSignIn()
+                    },
                     height = if (isCompact) 50.dp else 56.dp
                 )
 
@@ -148,6 +178,11 @@ fun SignUpScreen(
     var name by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var nameError by remember { mutableStateOf(false) }
+    var emailError by remember { mutableStateOf(false) }
+    var emailErrorText by remember { mutableStateOf<String?>(null) }
+    var passwordError by remember { mutableStateOf(false) }
+    var passwordErrorText by remember { mutableStateOf<String?>(null) }
 
     AuthBackground {
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -189,33 +224,62 @@ fun SignUpScreen(
 
                 AuthTextField(
                     value = name,
-                    onValueChange = { name = it },
-                    placeholder = "Full Name"
+                    onValueChange = {
+                        name = it
+                        if (nameError) nameError = false
+                    },
+                    placeholder = "Full Name",
+                    isError = nameError,
+                    errorText = if (nameError) "Name is required" else null
                 )
 
                 Spacer(modifier = Modifier.height(if (isCompact) 10.dp else 16.dp))
 
                 AuthTextField(
                     value = email,
-                    onValueChange = { email = it },
+                    onValueChange = {
+                        email = it
+                        if (emailError) {
+                            emailError = false
+                            emailErrorText = null
+                        }
+                    },
                     placeholder = "Email address",
-                    keyboardType = KeyboardType.Email
+                    keyboardType = KeyboardType.Email,
+                    isError = emailError,
+                    errorText = emailErrorText
                 )
 
                 Spacer(modifier = Modifier.height(if (isCompact) 10.dp else 16.dp))
 
                 AuthTextField(
                     value = password,
-                    onValueChange = { password = it },
+                    onValueChange = {
+                        password = it
+                        if (passwordError) {
+                            passwordError = false
+                            passwordErrorText = null
+                        }
+                    },
                     placeholder = "Password",
-                    isPassword = true
+                    isPassword = true,
+                    showStrength = true,
+                    isError = passwordError,
+                    errorText = passwordErrorText
                 )
 
                 Spacer(modifier = Modifier.height(if (isCompact) 12.dp else 24.dp))
 
                 AuthButton(
                     text = "Continue",
-                    onClick = { onContinue(email) },
+                    onClick = {
+                        nameError = name.isBlank()
+                        emailError = !isValidEmail(email)
+                        emailErrorText = if (emailError) "Enter a valid email address" else null
+                        passwordError = password.length < 6
+                        passwordErrorText = if (passwordError) "Minimum 6 characters" else null
+                        if (!nameError && !emailError && !passwordError) onContinue(email)
+                    },
                     height = if (isCompact) 50.dp else 56.dp
                 )
 
@@ -290,30 +354,105 @@ fun AuthTextField(
     onValueChange: (String) -> Unit,
     placeholder: String,
     keyboardType: KeyboardType = KeyboardType.Text,
-    isPassword: Boolean = false
+    isPassword: Boolean = false,
+    showStrength: Boolean = false,
+    isError: Boolean = false,
+    errorText: String? = null
 ) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        placeholder = {
-            Text(placeholder, color = Color.White.copy(alpha = 0.6f))
-        },
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = Color.White.copy(alpha = 0.12f),
-            unfocusedContainerColor = Color.White.copy(alpha = 0.12f),
-            focusedBorderColor = Color.Transparent,
-            unfocusedBorderColor = Color.Transparent,
-            focusedTextColor = Color.White,
-            unfocusedTextColor = Color.White,
-            cursorColor = AccentPink
-        ),
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
-        visualTransformation = if (isPassword) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None
-    )
+    var passwordVisible by remember { mutableStateOf(false) }
+    val borderColor = if (isError) NopeCoral else Color.Transparent
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            placeholder = {
+                Text(placeholder, color = Color.White.copy(alpha = 0.6f))
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = Color.White.copy(alpha = 0.12f),
+                unfocusedContainerColor = Color.White.copy(alpha = 0.12f),
+                focusedBorderColor = borderColor,
+                unfocusedBorderColor = borderColor,
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White,
+                cursorColor = AccentPink
+            ),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+            visualTransformation = if (isPassword && !passwordVisible) PasswordVisualTransformation()
+                else VisualTransformation.None,
+            trailingIcon = if (isPassword) {
+                {
+                    IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                        Icon(
+                            imageVector = if (passwordVisible) Icons.Default.Visibility
+                                else Icons.Default.VisibilityOff,
+                            contentDescription = if (passwordVisible) "Hide password" else "Show password",
+                            tint = Color.White
+                        )
+                    }
+                }
+            } else null
+        )
+
+        if (showStrength && isPassword && value.isNotEmpty()) {
+            val strength = passwordStrength(value)
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                repeat(4) { i ->
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(3.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(
+                                if (i < strength.segments) strength.color
+                                else Color.White.copy(alpha = 0.2f)
+                            )
+                    )
+                }
+                Text(
+                    text = strength.label,
+                    color = strength.color,
+                    fontSize = 11.sp
+                )
+            }
+        }
+
+        if (isError && !errorText.isNullOrEmpty()) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = errorText,
+                color = NopeCoral,
+                fontSize = 11.sp
+            )
+        }
+    }
 }
+
+/**
+ * Strength tier for a password string, based on character length.
+ * <6 chars = Weak, 6-8 = Fair, 9-11 = Good, 12+ = Strong.
+ */
+private data class PasswordStrength(val segments: Int, val label: String, val color: Color)
+
+private fun passwordStrength(password: String): PasswordStrength = when {
+    password.length < 6 -> PasswordStrength(1, "Weak", NopeCoral)
+    password.length <= 8 -> PasswordStrength(2, "Fair", TinderGold)
+    password.length <= 11 -> PasswordStrength(3, "Good", TinderGreen)
+    else -> PasswordStrength(4, "Strong", SuperBlue)
+}
+
+private val emailRegex = Regex("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\$")
+
+private fun isValidEmail(email: String): Boolean = emailRegex.matches(email)
 
 @Composable
 fun AuthButton(

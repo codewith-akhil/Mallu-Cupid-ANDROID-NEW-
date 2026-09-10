@@ -29,12 +29,12 @@ import kotlinx.coroutines.launch
 /**
  * LoadingStateScreen
  *
- * Displays a luxury animated pulsing Cupid logo with Kerala dating tips
+ * Displays a luxury animated pulsing Cupid logo with dating tips
  * and smooth circular progress.
  */
 @Composable
 fun LoadingStateScreen(
-    message: String = "Finding Kerala singles near you...",
+    message: String = "Finding singles near you...",
     onCancel: (() -> Unit)? = null
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
@@ -96,7 +96,7 @@ fun LoadingStateScreen(
         Spacer(modifier = Modifier.height(10.dp))
 
         Text(
-            text = "Tip: Profiles with verified selfies in Kochi, Calicut & Trivandrum get 3x more dates!",
+            text = "Tip: Profiles with verified selfies get 3x more dates!",
             fontSize = 13.sp,
             color = DashboardNavMuted,
             textAlign = TextAlign.Center,

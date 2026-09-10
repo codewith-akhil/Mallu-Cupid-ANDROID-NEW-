@@ -15,11 +15,11 @@ data class OnboardingDraft(
     val birthDay: String = "15",
     val birthMonth: String = "08",
     val birthYear: String = "1998",
-    val city: String = "Kochi, Kerala, India",
+    val city: String = "Sydney, Australia",
     val distance: Int = 25,
     val pronouns: String = "He",
     val height: String = "165 cm",
-    val languages: List<String> = listOf("English", "Malayalam"),
+    val languages: List<String> = listOf("English", "Spanish"),
     val photos: List<String> = listOf(
         "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=800&q=80",
         "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=800&q=80",
@@ -29,7 +29,7 @@ data class OnboardingDraft(
         "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=800&q=80"
     ),
     val smartPhotos: Boolean = true,
-    val bio: String = "Back in Kochi again 👋 This time looking for something genuine and meaningful. Tech founder, filter coffee enthusiast, and weekend explorer.",
+    val bio: String = "Back in Sydney again 👋 This time looking for something genuine and meaningful. Tech founder, coffee enthusiast, and weekend explorer.",
     val interests: List<String> = listOf("Entrepreneurship", "Exchange programme", "Foodie", "Travel", "Music", "Art"),
     val goal: String = "Long-term partner",
     val prompts: List<PromptItem> = listOf(
@@ -47,7 +47,7 @@ data class OnboardingDraft(
     val smoking: String = "Non-smoker",
     val workout: String = "Sometimes",
     val socialMedia: String = "Passive scroller",
-    val college: String = "Govt Polytechnic College",
+    val college: String = "City Polytechnic",
     val courseName: String = "B.Tech Computer Science",
     val jobTitle: String = "Founder",
     val company: String = "METRIC FLUX SOLUTIONS PVT LTD",
@@ -83,9 +83,9 @@ data class OnboardingDraft(
     val pushPromos: Boolean = false,
     val pushLikesFrequency: String = "Every 1 new like",
     val blockedUsers: List<BlockedUser> = listOf(
-        BlockedUser("blk_1", "Deepak Nair", "Kochi", "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=400&q=80"),
-        BlockedUser("blk_2", "Sneha Menon", "Thrissur", "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80"),
-        BlockedUser("blk_3", "Rahul Rajan", "Trivandrum", "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80")
+        BlockedUser("blk_1", "Deepak Nair", "Sydney", "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=400&q=80"),
+        BlockedUser("blk_2", "Sneha Menon", "Melbourne", "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80"),
+        BlockedUser("blk_3", "Rahul Rajan", "Toronto", "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80")
     )
 ) {
     val calculatedAge: Int
@@ -117,7 +117,7 @@ data class DatingProfile(
     val lookingFor: String = "Long-term partner",
     val essentialsGender: String = "Woman",
     val astrologyStar: String = "Libra",
-    val musicAnthem: String = "Darshana · Hridayam",
+    val musicAnthem: String = "Perfect · Ed Sheeran",
     val communicationStyle: String = "Better in person",
     val loveStyle: String = "Presents",
     val education: String = "Bachelor degree",
@@ -145,7 +145,7 @@ object SampleProfiles {
             name = "Remy",
             age = 39,
             isVerified = true,
-            location = "Kochi · 6 km away",
+            location = "Sydney · 6 km away",
             distanceKm = 6,
             bio = "I'm a simple person with a slightly complicated brain. I overthink everything, laugh at the most random things, and ask way too many questions. I love good conversations, good food, spontaneous plans, and people who can keep up with my thoughts.",
             photos = listOf(
@@ -162,7 +162,7 @@ object SampleProfiles {
             lookingFor = "Long-term partner",
             essentialsGender = "Woman",
             astrologyStar = "Scorpio",
-            musicAnthem = "Pavizha Mazha · Athiran",
+            musicAnthem = "Watermelon Sugar · Harry Styles",
             communicationStyle = "Better in person",
             loveStyle = "Quality time",
             education = "Master's degree",
@@ -172,18 +172,18 @@ object SampleProfiles {
             pets = "Dog lover",
             prompts = listOf(
                 PromptItem("A surprising thing about me is:", "I overthink everything and ask way too many questions 😄"),
-                PromptItem("My simple pleasures in life:", "Filter coffee, slow rains, and spontaneous late drives.")
+                PromptItem("My simple pleasures in life:", "Coffee, slow rains, and spontaneous late drives.")
             ),
-            interests = listOf("Travel", "Filter Coffee", "Music", "Conversations", "Foodie", "Books")
+            interests = listOf("Travel", "Coffee", "Music", "Conversations", "Foodie", "Books")
         ),
         DatingProfile(
             id = "1",
             name = "Misba",
             age = 22,
             isVerified = false, // Set to false to showcase Unverified badge in First Impression!
-            location = "Kochi · 6 km away",
+            location = "Sydney · 6 km away",
             distanceKm = 6,
-            bio = "Art student who loves experimenting with watercolors, indie acoustic tracks, and late night chai discussions.",
+            bio = "Art student who loves experimenting with watercolors, indie acoustic tracks, and late night tea discussions.",
             photos = listOf(
                 "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=900&q=85",
                 "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=900&q=85",
@@ -203,7 +203,7 @@ object SampleProfiles {
             pets = "Don't have, but love",
             prompts = listOf(
                 PromptItem("A surprising thing about me is:", "Talk a lot once I'm comfortable 😄"),
-                PromptItem("My simple pleasures in life:", "Sunset at Fort Kochi beach and freshly brewed sulaimani.")
+                PromptItem("My simple pleasures in life:", "Sunset at the beach and freshly brewed tea.")
             ),
             interests = listOf("Art", "Painting", "Drawing", "Foodie", "Travel", "Museums")
         ),
@@ -212,7 +212,7 @@ object SampleProfiles {
             name = "Resh",
             age = 32,
             isVerified = true,
-            location = "Calicut · 146 km away",
+            location = "Melbourne · 146 km away",
             distanceKm = 146,
             bio = "Looking for fun moments, spontaneous weekend trips, and someone who appreciates good banter.",
             photos = listOf(
@@ -224,7 +224,7 @@ object SampleProfiles {
             lookingFor = "Short-term fun",
             essentialsGender = "Woman",
             astrologyStar = "Leo",
-            musicAnthem = "Aalroopam · Thallumaala",
+            musicAnthem = "Photograph · Ed Sheeran",
             communicationStyle = "Replies quickly",
             loveStyle = "Quality time",
             education = "Master's degree",
@@ -242,7 +242,7 @@ object SampleProfiles {
             name = "HINASH",
             age = 23,
             isVerified = true,
-            location = "Kozhikode · 24h left",
+            location = "London · 24h left",
             distanceKm = 18,
             bio = "Fashion graduate & modest stylist. Tea over coffee, always.",
             photos = listOf(
@@ -253,7 +253,7 @@ object SampleProfiles {
             lookingFor = "Long-term partner",
             essentialsGender = "Woman",
             astrologyStar = "Taurus",
-            musicAnthem = "Pavizha Mazha · Athiran",
+            musicAnthem = "Perfect · Ed Sheeran",
             communicationStyle = "Better in person",
             loveStyle = "Acts of service",
             education = "Degree in Fashion",
@@ -271,7 +271,7 @@ object SampleProfiles {
             name = "Zainab",
             age = 30,
             isVerified = true,
-            location = "Ernakulam · 24h left",
+            location = "Vancouver · 24h left",
             distanceKm = 12,
             bio = "Curator & architect. Love minimalist aesthetics and cozy bookstores.",
             photos = listOf(
@@ -282,7 +282,7 @@ object SampleProfiles {
             lookingFor = "Serious commitment",
             essentialsGender = "Woman",
             astrologyStar = "Virgo",
-            musicAnthem = "Darshana · Hridayam",
+            musicAnthem = "Watermelon Sugar · Harry Styles",
             communicationStyle = "Thoughtful texter",
             loveStyle = "Deep talks",
             education = "Bachelor of Architecture",
@@ -300,7 +300,7 @@ object SampleProfiles {
             name = "Aparna",
             age = 30,
             isVerified = true,
-            location = "Trivandrum · 12h left",
+            location = "Toronto · 12h left",
             distanceKm = 24,
             bio = "Doctor by training, classical dancer by heart. Finding calm in life's rhythm.",
             photos = listOf(
@@ -310,7 +310,7 @@ object SampleProfiles {
             lookingFor = "Long-term partner",
             essentialsGender = "Woman",
             astrologyStar = "Cancer",
-            musicAnthem = "Nee Himamazhayayi",
+            musicAnthem = "Photograph · Ed Sheeran",
             communicationStyle = "Calls over texts",
             loveStyle = "Affection",
             education = "MBBS, MD",
@@ -328,7 +328,7 @@ object SampleProfiles {
             name = "Unnati",
             age = 22,
             isVerified = true,
-            location = "Kochi · 12h left",
+            location = "Sydney · 12h left",
             distanceKm = 5,
             bio = "Psychology student & podcaster. Forever chasing sunsets and good conversations.",
             photos = listOf(
@@ -356,7 +356,7 @@ object SampleProfiles {
             name = "Zappy",
             age = 25,
             isVerified = true,
-            location = "Kochi",
+            location = "Sydney",
             distanceKm = 8,
             bio = "Content creator & traveler. Always with a camera in hand.",
             photos = listOf(

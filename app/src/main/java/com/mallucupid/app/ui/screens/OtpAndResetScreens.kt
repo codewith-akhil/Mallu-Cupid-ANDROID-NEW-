@@ -1,5 +1,6 @@
 package com.mallucupid.app.ui.screens
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -13,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -122,15 +124,30 @@ fun OtpVerificationScreen(
     onBack: () -> Unit
 ) {
     var otp by remember { mutableStateOf(List(6) { "" }) }
-    var timer by remember { mutableStateOf(60) }
+    var resendSeconds by remember { mutableStateOf(60) }
+    var resendTrigger by remember { mutableStateOf(0) }
     var loading by remember { mutableStateOf(false) }
     val focusRequesters = List(6) { remember { FocusRequester() } }
     val focusManager = LocalFocusManager.current
+    val context = LocalContext.current
 
-    LaunchedEffect(Unit) {
-        while (timer > 0) {
+    // 60-second resend countdown — restarts whenever resendTrigger changes.
+    LaunchedEffect(resendTrigger) {
+        while (resendSeconds > 0) {
             delay(1000)
-            timer--
+            resendSeconds--
+        }
+    }
+
+    // Auto-advance: when all 6 boxes are filled, trigger verify after a short 200ms delay.
+    val allOtpFilled = otp.all { it.isNotEmpty() }
+    LaunchedEffect(allOtpFilled) {
+        if (allOtpFilled && !loading) {
+            delay(200)
+            // Re-check in case the user cleared a box during the delay window.
+            if (otp.all { it.isNotEmpty() }) {
+                loading = true
+            }
         }
     }
 
@@ -177,16 +194,18 @@ fun OtpVerificationScreen(
 
                 Spacer(modifier = Modifier.height(if (isCompact) 14.dp else 36.dp))
 
-                // OTP boxes
+                // OTP boxes — 6 individual digit boxes, auto-advance on entry,
+                // centered horizontally, each ~52.dp wide, spacedBy 12.dp.
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     otp.forEachIndexed { index, value ->
                         OutlinedTextField(
                             value = value,
                             onValueChange = { newValue ->
+                                // Accept at most one digit (empty allowed for delete/backspace).
                                 if (newValue.length <= 1 && newValue.all { it.isDigit() }) {
                                     val newOtp = otp.toMutableList()
                                     newOtp[index] = newValue
@@ -201,20 +220,20 @@ fun OtpVerificationScreen(
                                 }
                             },
                             modifier = Modifier
-                                .weight(1f)
+                                .width(52.dp)
                                 .height(if (isCompact) 50.dp else 56.dp)
                                 .focusRequester(focusRequesters[index]),
                             textStyle = LocalTextStyle.current.copy(
                                 textAlign = TextAlign.Center,
-                                fontSize = if (isCompact) 18.sp else 20.sp,
+                                fontSize = 22.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = Color.White
+                                color = DashboardCream
                             ),
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = Color.White.copy(alpha = 0.12f),
-                                unfocusedContainerColor = Color.White.copy(alpha = 0.12f),
+                                focusedContainerColor = Color.White.copy(alpha = 0.08f),
+                                unfocusedContainerColor = Color.White.copy(alpha = 0.08f),
                                 focusedBorderColor = AccentPink,
                                 unfocusedBorderColor = Color.Transparent,
                                 cursorColor = AccentPink
@@ -238,24 +257,25 @@ fun OtpVerificationScreen(
 
                 Spacer(modifier = Modifier.height(if (isCompact) 12.dp else 24.dp))
 
-                if (timer > 0) {
+                // Resend code button — disabled while countdown > 0, enabled at 0.
+                TextButton(
+                    onClick = {
+                        otp = List(6) { "" }
+                        resendSeconds = 60
+                        resendTrigger++
+                        Toast.makeText(context, "Code resent", Toast.LENGTH_SHORT).show()
+                    },
+                    enabled = resendSeconds == 0,
+                    contentPadding = if (isCompact) PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                     else ButtonDefaults.TextButtonContentPadding
+                ) {
                     Text(
-                        text = "Resend OTP in ${timer}s",
-                        color = Color.White.copy(alpha = 0.85f),
+                        text = if (resendSeconds == 0) "Resend code"
+                               else "Resend code in 0:${resendSeconds.toString().padStart(2, '0')}",
+                        color = if (resendSeconds == 0) AccentPink else DashboardNavMuted,
+                        fontWeight = FontWeight.SemiBold,
                         fontSize = if (isCompact) 13.sp else 14.sp
                     )
-                } else {
-                    TextButton(
-                        onClick = { timer = 60 },
-                        contentPadding = if (isCompact) PaddingValues(horizontal = 8.dp, vertical = 2.dp) else ButtonDefaults.TextButtonContentPadding
-                    ) {
-                        Text(
-                            text = "Resend OTP",
-                            color = SoftPink,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = if (isCompact) 13.sp else 14.sp
-                        )
-                    }
                 }
             }
         }

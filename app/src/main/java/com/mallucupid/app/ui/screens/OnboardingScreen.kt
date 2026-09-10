@@ -16,7 +16,9 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -29,24 +31,36 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.offset
+import androidx.compose.ui.layout.zIndex
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -55,6 +69,7 @@ import com.mallucupid.app.data.OnboardingDraft
 import com.mallucupid.app.data.PromptItem
 import com.mallucupid.app.data.SampleProfiles
 import com.mallucupid.app.ui.theme.*
+import kotlin.math.roundToInt
 
 private const val TOTAL_STEPS = 9
 
@@ -74,7 +89,7 @@ private val promptOptions = listOf(
     "A non-negotiable for me is..."
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun OnboardingScreen(
     initialDraft: OnboardingDraft = OnboardingDraft(),
@@ -87,6 +102,7 @@ fun OnboardingScreen(
     var isSaving by remember { mutableStateOf(false) }
 
     val scrollState = rememberScrollState()
+    val previewScrollState = rememberScrollState()
 
     // Smooth animated progress
     val animatedProgress by animateFloatAsState(
@@ -228,117 +244,76 @@ fun OnboardingScreen(
                 )
             }
 
-            // Scrollable Content
-            Column(
+            // Scrollable Content — with optional live profile preview alongside the form.
+            // Wide screens (>= 600.dp) get a sticky preview column on the right; compact
+            // screens pin the preview at the top of the scrollable content.
+            BoxWithConstraints(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .verticalScroll(scrollState)
                     .padding(top = 20.dp, bottom = 16.dp)
             ) {
-                Text(
-                    text = "Let’s make your profile feel like you",
-                    color = Color.White.copy(alpha = 0.7f),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
+                val showPreview = step in setOf(4, 5, 6, 8)
+                val isWide = maxWidth >= 600.dp
 
-                Spacer(modifier = Modifier.height(10.dp))
-
-                when (step) {
-                    1 -> Step1Gender(
-                        gender = draft.gender,
-                        onGenderChange = { draft = draft.copy(gender = it) },
-                        lookingFor = draft.lookingFor,
-                        onLookingForChange = { draft = draft.copy(lookingFor = it) }
-                    )
-                    2 -> Step2Birthday(
-                        day = draft.birthDay,
-                        month = draft.birthMonth,
-                        year = draft.birthYear,
-                        onDayChange = { draft = draft.copy(birthDay = it) },
-                        onMonthChange = { draft = draft.copy(birthMonth = it) },
-                        onYearChange = { draft = draft.copy(birthYear = it) },
-                        age = draft.calculatedAge
-                    )
-                    3 -> Step3Location(
-                        city = draft.city,
-                        onCityChange = { draft = draft.copy(city = it) },
-                        distance = draft.distance,
-                        onDistanceChange = { draft = draft.copy(distance = it) }
-                    )
-                    4 -> Step4Photos(
-                        photos = draft.photos,
-                        onPhotosChange = { draft = draft.copy(photos = it) }
-                    )
-                    5 -> Step5Basics(
-                        bio = draft.bio,
-                        onBioChange = { draft = draft.copy(bio = it) }
-                    )
-                    6 -> Step6Interests(
-                        selectedInterests = draft.interests,
-                        onToggle = { interest ->
-                            val current = draft.interests
-                            val updated = if (current.contains(interest)) {
-                                current - interest
-                            } else {
-                                current + interest
-                            }
-                            draft = draft.copy(interests = updated)
+                if (showPreview && isWide) {
+                    // Two-pane layout: form (scrollable) + sticky preview (right)
+                    Row(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .verticalScroll(scrollState)
+                        ) {
+                            Text(
+                                text = "Let’s make your profile feel like you",
+                                color = Color.White.copy(alpha = 0.7f),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            OnboardingStepBody(
+                                step = step,
+                                draft = draft,
+                                onDraftChange = { draft = it },
+                                error = error
+                            )
                         }
-                    )
-                    7 -> Step7Goal(
-                        selectedGoal = draft.goal,
-                        onGoalChange = { draft = draft.copy(goal = it) }
-                    )
-                    8 -> Step8Prompts(
-                        prompts = draft.prompts,
-                        onPromptQuestionChange = { index, question ->
-                            val updated = draft.prompts.toMutableList()
-                            if (index < updated.size) {
-                                updated[index] = updated[index].copy(question = question)
-                                draft = draft.copy(prompts = updated)
-                            }
-                        },
-                        onPromptAnswerChange = { index, answer ->
-                            val updated = draft.prompts.toMutableList()
-                            if (index < updated.size) {
-                                updated[index] = updated[index].copy(answer = answer)
-                                draft = draft.copy(prompts = updated)
-                            }
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .verticalScroll(previewScrollState)
+                        ) {
+                            Spacer(modifier = Modifier.height(20.dp))
+                            LiveProfilePreviewCard(draft)
                         }
-                    )
-                    9 -> Step9Preferences(
-                        ageMin = draft.ageMin,
-                        ageMax = draft.ageMax,
-                        onAgeChange = { min, max ->
-                            draft = draft.copy(ageMin = min, ageMax = max)
-                        },
-                        dealBreakers = draft.dealBreakers,
-                        onToggleDealBreaker = { item ->
-                            val current = draft.dealBreakers
-                            val updated = if (current.contains(item)) {
-                                current - item
-                            } else {
-                                current + item
-                            }
-                            draft = draft.copy(dealBreakers = updated)
-                        }
-                    )
-                }
-
-                if (error.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(14.dp))
-                    Surface(
-                        color = AccentPink.copy(alpha = 0.2f),
-                        border = BorderStroke(1.dp, AccentPink.copy(alpha = 0.6f)),
-                        shape = RoundedCornerShape(12.dp)
+                    }
+                } else {
+                    // Single column, with the preview pinned at the top of the form
+                    // when shown (so it scrolls together with the step content).
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(scrollState)
                     ) {
                         Text(
-                            text = error,
-                            color = SoftPink,
-                            fontSize = 13.sp,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                            text = "Let’s make your profile feel like you",
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        if (showPreview) {
+                            LiveProfilePreviewCard(draft)
+                            Spacer(modifier = Modifier.height(16.dp))
+                        }
+                        OnboardingStepBody(
+                            step = step,
+                            draft = draft,
+                            onDraftChange = { draft = it },
+                            error = error
                         )
                     }
                 }
@@ -398,6 +373,290 @@ fun OnboardingScreen(
             }
         }
     }
+}
+
+// -------------------------------------------------------------
+// STEP BODY DISPATCHER + LIVE PREVIEW CARD
+// -------------------------------------------------------------
+@Composable
+private fun OnboardingStepBody(
+    step: Int,
+    draft: OnboardingDraft,
+    onDraftChange: (OnboardingDraft) -> Unit,
+    error: String
+) {
+    when (step) {
+        1 -> Step1Gender(
+            gender = draft.gender,
+            onGenderChange = { onDraftChange(draft.copy(gender = it)) },
+            lookingFor = draft.lookingFor,
+            onLookingForChange = { onDraftChange(draft.copy(lookingFor = it)) }
+        )
+        2 -> Step2Birthday(
+            day = draft.birthDay,
+            month = draft.birthMonth,
+            year = draft.birthYear,
+            onDayChange = { onDraftChange(draft.copy(birthDay = it)) },
+            onMonthChange = { onDraftChange(draft.copy(birthMonth = it)) },
+            onYearChange = { onDraftChange(draft.copy(birthYear = it)) },
+            age = draft.calculatedAge
+        )
+        3 -> Step3Location(
+            city = draft.city,
+            onCityChange = { onDraftChange(draft.copy(city = it)) },
+            distance = draft.distance,
+            onDistanceChange = { onDraftChange(draft.copy(distance = it)) }
+        )
+        4 -> Step4Photos(
+            photos = draft.photos,
+            onPhotosChange = { onDraftChange(draft.copy(photos = it)) }
+        )
+        5 -> Step5Basics(
+            bio = draft.bio,
+            onBioChange = { onDraftChange(draft.copy(bio = it)) }
+        )
+        6 -> Step6Interests(
+            selectedInterests = draft.interests,
+            onToggle = { interest ->
+                val current = draft.interests
+                val updated = if (current.contains(interest)) {
+                    current - interest
+                } else {
+                    current + interest
+                }
+                onDraftChange(draft.copy(interests = updated))
+            }
+        )
+        7 -> Step7Goal(
+            selectedGoal = draft.goal,
+            onGoalChange = { onDraftChange(draft.copy(goal = it)) }
+        )
+        8 -> Step8Prompts(
+            prompts = draft.prompts,
+            onPromptQuestionChange = { index, question ->
+                val updated = draft.prompts.toMutableList()
+                if (index < updated.size) {
+                    updated[index] = updated[index].copy(question = question)
+                    onDraftChange(draft.copy(prompts = updated))
+                }
+            },
+            onPromptAnswerChange = { index, answer ->
+                val updated = draft.prompts.toMutableList()
+                if (index < updated.size) {
+                    updated[index] = updated[index].copy(answer = answer)
+                    onDraftChange(draft.copy(prompts = updated))
+                }
+            }
+        )
+        9 -> Step9Preferences(
+            ageMin = draft.ageMin,
+            ageMax = draft.ageMax,
+            onAgeChange = { min, max ->
+                onDraftChange(draft.copy(ageMin = min, ageMax = max))
+            },
+            dealBreakers = draft.dealBreakers,
+            onToggleDealBreaker = { item ->
+                val current = draft.dealBreakers
+                val updated = if (current.contains(item)) {
+                    current - item
+                } else {
+                    current + item
+                }
+                onDraftChange(draft.copy(dealBreakers = updated))
+            }
+        )
+    }
+
+    if (error.isNotBlank()) {
+        Spacer(modifier = Modifier.height(14.dp))
+        Surface(
+            color = AccentPink.copy(alpha = 0.2f),
+            border = BorderStroke(1.dp, AccentPink.copy(alpha = 0.6f)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Text(
+                text = error,
+                color = SoftPink,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+            )
+        }
+    }
+}
+
+/**
+ * Compact dating-style profile preview card. Reads the live [OnboardingDraft] reactively
+ * (it depends on `draft` via Compose state) so it updates as the user fills in the form.
+ *
+ * Tokens used: DashboardCard / DashboardCream / DashboardMutedBeige / DashboardTerracotta /
+ * DashboardPeach / DashboardNavMuted / TinderGreen (online dot) / TinderGold (primary star).
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun LiveProfilePreviewCard(draft: OnboardingDraft) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = DashboardCard,
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            // Header label — "LIVE PREVIEW" with a tiny online-style dot
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(TinderGreen)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "LIVE PREVIEW",
+                    color = DashboardNavMuted,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.sp
+                )
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Photo + name/age row
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val firstPhoto = draft.photos.firstOrNull()
+                Box(
+                    modifier = Modifier
+                        .size(80.dp)
+                        .clip(CircleShape)
+                        .border(2.dp, DashboardTerracotta, CircleShape)
+                        .background(Color.White.copy(alpha = 0.08f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (firstPhoto != null) {
+                        AsyncImage(
+                            model = firstPhoto,
+                            contentDescription = "Profile photo preview",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Person,
+                            contentDescription = null,
+                            tint = DashboardNavMuted,
+                            modifier = Modifier.size(34.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = if (draft.name.isNotBlank()) draft.name else "Your name",
+                        color = DashboardCream,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(3.dp))
+                    val locationLabel = draft.city.takeIf { it.isNotBlank() }?.let { formatPreviewLocation(it) }
+                    val meta = buildString {
+                        append(draft.calculatedAge)
+                        if (locationLabel != null) append(" · $locationLabel")
+                    }
+                    Text(
+                        text = meta,
+                        color = DashboardMutedBeige,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Bio preview (1-2 lines)
+            Text(
+                text = draft.bio.takeIf { it.isNotBlank() }
+                    ?: "Your bio will appear here.",
+                color = DashboardMutedBeige,
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            // Up to 4 interest chips (wrapping FlowRow)
+            if (draft.interests.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    draft.interests.take(4).forEach { interest ->
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = DashboardTerracotta.copy(alpha = 0.18f),
+                            border = BorderStroke(1.dp, DashboardTerracotta.copy(alpha = 0.5f))
+                        ) {
+                            Text(
+                                text = interest,
+                                color = DashboardCream,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // First prompt Q+A (only if answered)
+            val firstPrompt = draft.prompts.firstOrNull()?.takeIf { it.answer.isNotBlank() }
+            if (firstPrompt != null) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color.White.copy(alpha = 0.04f)
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(
+                            text = firstPrompt.question,
+                            color = DashboardPeach,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = firstPrompt.answer,
+                            color = DashboardMutedBeige,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Shortens a long "City, State, Country" string to just the leading locality for the preview meta.
+ */
+private fun formatPreviewLocation(rawCity: String): String? {
+    if (rawCity.isBlank()) return null
+    val first = rawCity.substringBefore(",").trim()
+    return first.ifBlank { null }
 }
 
 // -------------------------------------------------------------
@@ -999,6 +1258,15 @@ private fun Step4Photos(
         }
     }
 
+    // Drag-to-reorder state
+    var draggedIndex by remember { mutableStateOf<Int?>(null) }
+    var dragOffset by remember { mutableStateOf(Offset.Zero) }
+    // Pixel size of a single photo slot — captured once laid out so we can translate
+    // the user's drag distance into a (row, col) drop target.
+    var slotSizePx by remember { mutableStateOf(IntSize.Zero) }
+    val density = LocalDensity.current
+    val gridSpacingPx = with(density) { 10.dp.toPx() }
+
     Column {
         Text(
             text = "Show your best side.",
@@ -1013,11 +1281,17 @@ private fun Step4Photos(
             fontSize = 15.sp,
             lineHeight = 22.sp
         )
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "Tip: long-press a photo to drag and reorder. The first photo is your Primary.",
+            color = Color.White.copy(alpha = 0.7f),
+            fontSize = 12.sp,
+            lineHeight = 18.sp
+        )
+        Spacer(modifier = Modifier.height(16.dp))
 
-        // 3-column photo grid
+        // 3-column reorderable photo grid (2 rows × 3 cols = 6 slots)
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            val totalSlots = 6
             for (row in 0 until 2) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1026,13 +1300,74 @@ private fun Step4Photos(
                     for (col in 0 until 3) {
                         val index = row * 3 + col
                         val photoUrl = photos.getOrNull(index)
+                        val isDragged = draggedIndex == index
 
                         Box(
                             modifier = Modifier
                                 .weight(1f)
                                 .aspectRatio(0.82f)
                                 .clip(RoundedCornerShape(14.dp))
-                                .background(Color.White.copy(alpha = 0.1f)),
+                                .background(Color.White.copy(alpha = 0.1f))
+                                .then(
+                                    if (isDragged) Modifier
+                                        .offset {
+                                            IntOffset(
+                                                dragOffset.x.roundToInt(),
+                                                dragOffset.y.roundToInt()
+                                            )
+                                        }
+                                        .zIndex(1f)
+                                    else Modifier
+                                )
+                                .onGloballyPositioned { coords ->
+                                    if (slotSizePx == IntSize.Zero) {
+                                        slotSizePx = coords.size
+                                    }
+                                }
+                                .pointerInput(photoUrl) {
+                                    // Only attach the gesture detector on filled slots.
+                                    if (photoUrl != null) {
+                                        detectDragGesturesAfterLongPress(
+                                            onDragStart = {
+                                                draggedIndex = index
+                                                dragOffset = Offset.Zero
+                                            },
+                                            onDrag = { change, dragAmount ->
+                                                change.consume()
+                                                dragOffset += dragAmount
+                                            },
+                                            onDragEnd = {
+                                                val dragged = draggedIndex
+                                                if (dragged != null &&
+                                                    slotSizePx.width > 0 &&
+                                                    photoUrl != null
+                                                ) {
+                                                    val slotW = slotSizePx.width.toFloat()
+                                                    val slotH = slotSizePx.height.toFloat()
+                                                    val colTarget = ((dragOffset.x + slotW / 2f) /
+                                                        (slotW + gridSpacingPx)).roundToInt().coerceIn(0, 2)
+                                                    val rowTarget = ((dragOffset.y + slotH / 2f) /
+                                                        (slotH + gridSpacingPx)).roundToInt().coerceIn(0, 1)
+                                                    val targetIndex = (rowTarget * 3 + colTarget).coerceIn(0, 5)
+                                                    if (targetIndex != dragged &&
+                                                        targetIndex < photos.size) {
+                                                        val updated = photos.toMutableList()
+                                                        val tmp = updated[dragged]
+                                                        updated[dragged] = updated[targetIndex]
+                                                        updated[targetIndex] = tmp
+                                                        onPhotosChange(updated)
+                                                    }
+                                                }
+                                                draggedIndex = null
+                                                dragOffset = Offset.Zero
+                                            },
+                                            onDragCancel = {
+                                                draggedIndex = null
+                                                dragOffset = Offset.Zero
+                                            }
+                                        )
+                                    }
+                                },
                             contentAlignment = Alignment.Center
                         ) {
                             if (photoUrl != null) {
@@ -1043,49 +1378,131 @@ private fun Step4Photos(
                                     contentScale = ContentScale.Crop
                                 )
 
-                                // Main badge or number
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = Color.Black.copy(alpha = 0.72f),
+                                // Drag handle (top-left, small dark circle) — only on filled slots
+                                Box(
                                     modifier = Modifier
-                                        .align(Alignment.BottomStart)
-                                        .padding(7.dp)
+                                        .align(Alignment.TopStart)
+                                        .padding(6.dp)
+                                        .size(24.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.Black.copy(alpha = 0.65f)),
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    Text(
-                                        text = if (index == 0) "Main" else "${index + 1}",
-                                        color = Color.White,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                    Icon(
+                                        imageVector = Icons.Default.DragHandle,
+                                        contentDescription = "Drag to reorder",
+                                        tint = DashboardNavMuted,
+                                        modifier = Modifier.size(18.dp)
                                     )
                                 }
 
-                                // Remove button
-                                IconButton(
-                                    onClick = {
-                                        val updated = photos.toMutableList()
-                                        updated.removeAt(index)
-                                        onPhotosChange(updated)
-                                    },
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .size(28.dp)
-                                        .padding(4.dp)
-                                ) {
+                                // Primary star badge (top-right) — only on the first photo
+                                if (index == 0) {
                                     Surface(
-                                        shape = CircleShape,
-                                        color = Color.Black.copy(alpha = 0.6f)
+                                        shape = RoundedCornerShape(50),
+                                        color = Color.Black.copy(alpha = 0.72f),
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(6.dp)
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Close,
-                                            contentDescription = "Remove photo",
-                                            tint = Color.White,
-                                            modifier = Modifier.size(16.dp).padding(2.dp)
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier
+                                                .padding(horizontal = 6.dp, vertical = 3.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Star,
+                                                contentDescription = "Primary photo",
+                                                tint = TinderGold,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = "Primary",
+                                                color = TinderGold,
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    // Remove button (top-right) for non-primary filled slots
+                                    IconButton(
+                                        onClick = {
+                                            val updated = photos.toMutableList()
+                                            updated.removeAt(index)
+                                            onPhotosChange(updated)
+                                        },
+                                        // Touch target enlarged to 44dp accessibility minimum (icon stays 16dp)
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .size(44.dp)
+                                            .padding(4.dp)
+                                    ) {
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = Color.Black.copy(alpha = 0.6f)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Close,
+                                                contentDescription = "Remove photo",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(16.dp).padding(2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // Number badge (bottom-left). Index 0 is implied by the star,
+                                // so we only show a number for the rest.
+                                if (index > 0) {
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = Color.Black.copy(alpha = 0.72f),
+                                        modifier = Modifier
+                                            .align(Alignment.BottomStart)
+                                            .padding(7.dp)
+                                    ) {
+                                        Text(
+                                            text = "${index + 1}",
+                                            color = Color.White,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
                                         )
                                     }
                                 }
+
+                                // Remove button (bottom-right) for the primary slot, since the
+                                // top-right corner is reserved for the Primary star.
+                                if (index == 0) {
+                                    IconButton(
+                                        onClick = {
+                                            val updated = photos.toMutableList()
+                                            updated.removeAt(index)
+                                            onPhotosChange(updated)
+                                        },
+                                        // Touch target enlarged to 44dp accessibility minimum (icon stays 16dp)
+                                        modifier = Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .size(44.dp)
+                                            .padding(4.dp)
+                                    ) {
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = Color.Black.copy(alpha = 0.6f)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Close,
+                                                contentDescription = "Remove photo",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(16.dp).padding(2.dp)
+                                            )
+                                        }
+                                    }
+                                }
                             } else if (index == photos.size) {
-                                // Upload tile
+                                // Upload tile — only show on the next slot after the last photo
                                 Column(
                                     modifier = Modifier
                                         .fillMaxSize()
@@ -1216,7 +1633,7 @@ private fun Step5Basics(
                 decorationBox = { innerTextField ->
                     if (bio.isEmpty()) {
                         Text(
-                            text = "Software engineer who loves weekend road trips to Munnar, filter coffee, and acoustic Malayalam melodies.",
+                            text = "Software engineer who loves weekend road trips to the hills, coffee, and acoustic melodies.",
                             color = Color.White.copy(alpha = 0.45f),
                             fontSize = 15.sp,
                             lineHeight = 22.sp

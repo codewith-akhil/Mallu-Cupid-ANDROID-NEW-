@@ -57,6 +57,15 @@ fun FaceVerificationScreen(
     var analysisProgress by remember { mutableFloatStateOf(0f) }
     var analysisStatusText by remember { mutableStateOf("Initializing scanner...") }
 
+    // Camera flip (front/back) — visual state only for now
+    // TODO: integrate CameraX (androidx.camera) for real front/back camera switching
+    var useFrontCamera by remember { mutableStateOf(true) }
+    // Lighting check state — simulated 1s pre-capture check
+    // TODO: integrate CameraX ImageAnalysis for real luminance check
+    var checkingLighting by remember { mutableStateOf(false) }
+    // Review state — user reviews the just-captured selfie before moving on
+    var reviewingPose by remember { mutableStateOf(false) }
+
     // Camera Capture Launcher for live selfies
     val takeSelfieLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicturePreview()
@@ -64,11 +73,12 @@ fun FaceVerificationScreen(
         if (bitmap != null) {
             if (stage == VerificationStage.CAMERA_POSE_1) {
                 capturedPhoto1 = bitmap
-                stage = VerificationStage.CAMERA_POSE_2
-                Toast.makeText(context, "Pose 1 recorded! Now complete Pose 2", Toast.LENGTH_SHORT).show()
+                reviewingPose = true
+                Toast.makeText(context, "Pose 1 captured! Review your selfie", Toast.LENGTH_SHORT).show()
             } else if (stage == VerificationStage.CAMERA_POSE_2) {
                 capturedPhoto2 = bitmap
-                stage = VerificationStage.ANALYZING
+                reviewingPose = true
+                Toast.makeText(context, "Pose 2 captured! Review your selfie", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -84,6 +94,17 @@ fun FaceVerificationScreen(
         }
     }
 
+    // Lighting check — simulated 1s pass before allowing each pose capture
+    // TODO: integrate CameraX ImageAnalysis for real luminance check
+    LaunchedEffect(stage) {
+        if (stage == VerificationStage.CAMERA_POSE_1 || stage == VerificationStage.CAMERA_POSE_2) {
+            reviewingPose = false
+            checkingLighting = true
+            delay(1000)
+            checkingLighting = false
+        }
+    }
+
     // Simulated multi-step AI liveness check
     LaunchedEffect(stage) {
         if (stage == VerificationStage.ANALYZING) {
@@ -95,7 +116,7 @@ fun FaceVerificationScreen(
             analysisProgress = 0.60f
             delay(1000)
 
-            analysisStatusText = "Matching with your Kerala profile photos..."
+            analysisStatusText = "Matching with your profile photos..."
             analysisProgress = 0.88f
             delay(1100)
 
@@ -177,7 +198,7 @@ fun FaceVerificationScreen(
                     Spacer(modifier = Modifier.height(10.dp))
 
                     Text(
-                        text = "Show Kerala singles you're really the person in your photos by taking 2 quick selfie poses.",
+                        text = "Show singles nearby you're really the person in your photos by taking 2 quick selfie poses.",
                         fontSize = 14.sp,
                         color = DashboardMutedBeige,
                         textAlign = TextAlign.Center,
@@ -201,7 +222,7 @@ fun FaceVerificationScreen(
                             icon = Icons.Default.Bolt,
                             iconTint = RewindGold,
                             title = "Receive 2x More Matches",
-                            desc = "Kerala singles trust and prefer chatting with photo-verified profiles."
+                            desc = "Singles nearby trust and prefer chatting with photo-verified profiles."
                         )
                         VerificationBenefitItem(
                             icon = Icons.Default.Lock,
@@ -247,6 +268,9 @@ fun FaceVerificationScreen(
                 VerificationStage.CAMERA_POSE_1, VerificationStage.CAMERA_POSE_2 -> {
                     val isPose1 = stage == VerificationStage.CAMERA_POSE_1
 
+                    // Privacy explainer card (slim, top of camera stage)
+                    PrivacyExplainerCard()
+
                     Spacer(modifier = Modifier.height(10.dp))
 
                     // Progress indicators for Pose 1 & 2
@@ -284,116 +308,235 @@ fun FaceVerificationScreen(
 
                     Spacer(modifier = Modifier.height(20.dp))
 
-                    // Live Camera Oval Guide Reticle
+                    // Live Camera Oval Guide Reticle (wrapped so we can overlay the flip button)
                     Box(
-                        modifier = Modifier
-                            .size(width = 240.dp, height = 300.dp)
-                            .clip(RoundedCornerShape(120.dp))
-                            .background(Color(0xFF261E1A))
-                            .border(3.dp, if (isPose1) SuperBlue else DashboardPeach, RoundedCornerShape(120.dp)),
-                        contentAlignment = Alignment.Center
+                        modifier = Modifier.size(width = 240.dp, height = 300.dp)
                     ) {
-                        if (isPose1 && capturedPhoto1 != null) {
-                            Image(
-                                bitmap = capturedPhoto1!!.asImageBitmap(),
-                                contentDescription = "Pose 1 captured",
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
-                            )
-                        } else if (!isPose1 && capturedPhoto2 != null) {
-                            Image(
-                                bitmap = capturedPhoto2!!.asImageBitmap(),
-                                contentDescription = "Pose 2 captured",
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
-                            )
-                        } else {
-                            // Scanner Reticle Animation
-                            val infiniteTransition = rememberInfiniteTransition(label = "scan")
-                            val scanOffset by infiniteTransition.animateFloat(
-                                initialValue = -80f,
-                                targetValue = 80f,
-                                animationSpec = infiniteRepeatable(
-                                    animation = tween(1500, easing = LinearEasing),
-                                    repeatMode = RepeatMode.Reverse
-                                ),
-                                label = "scan_offset"
-                            )
-
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                Icon(
-                                    imageVector = if (isPose1) Icons.Default.Face else Icons.Default.FaceRetouchingNatural,
-                                    contentDescription = null,
-                                    tint = DashboardNavMuted,
-                                    modifier = Modifier.size(90.dp)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(RoundedCornerShape(120.dp))
+                                .background(Color(0xFF261E1A))
+                                .border(3.dp, if (isPose1) SuperBlue else DashboardPeach, RoundedCornerShape(120.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isPose1 && capturedPhoto1 != null) {
+                                Image(
+                                    bitmap = capturedPhoto1!!.asImageBitmap(),
+                                    contentDescription = "Pose 1 captured",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
                                 )
-                                Spacer(modifier = Modifier.height(10.dp))
-                                Text(
-                                    text = if (isPose1) "Hold face here" else "Turn head slightly",
-                                    fontSize = 13.sp,
-                                    color = DashboardNavMuted
+                            } else if (!isPose1 && capturedPhoto2 != null) {
+                                Image(
+                                    bitmap = capturedPhoto2!!.asImageBitmap(),
+                                    contentDescription = "Pose 2 captured",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            } else {
+                                // Scanner Reticle Animation
+                                val infiniteTransition = rememberInfiniteTransition(label = "scan")
+                                val scanOffset by infiniteTransition.animateFloat(
+                                    initialValue = -80f,
+                                    targetValue = 80f,
+                                    animationSpec = infiniteRepeatable(
+                                        animation = tween(1500, easing = LinearEasing),
+                                        repeatMode = RepeatMode.Reverse
+                                    ),
+                                    label = "scan_offset"
+                                )
+
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        imageVector = if (isPose1) Icons.Default.Face else Icons.Default.FaceRetouchingNatural,
+                                        contentDescription = null,
+                                        tint = DashboardNavMuted,
+                                        modifier = Modifier.size(90.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Text(
+                                        text = if (isPose1) "Hold face here" else "Turn head slightly",
+                                        fontSize = 13.sp,
+                                        color = DashboardNavMuted
+                                    )
+                                }
+
+                                // Moving scan line
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(2.dp)
+                                        .offset(y = scanOffset.dp)
+                                        .background(
+                                            Brush.horizontalGradient(
+                                                listOf(Color.Transparent, SuperBlue, Color.Transparent)
+                                            )
+                                        )
                                 )
                             }
+                        }
 
-                            // Moving scan line
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(2.dp)
-                                    .offset(y = scanOffset.dp)
-                                    .background(
-                                        Brush.horizontalGradient(
-                                            listOf(Color.Transparent, SuperBlue, Color.Transparent)
-                                        )
-                                    )
+                        // Camera flip button (top-right of the camera preview area)
+                        // TODO: integrate CameraX (androidx.camera) for real front/back camera switching
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(8.dp)
+                                // Touch target enlarged to 44dp accessibility minimum (icon stays 20dp)
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xCC000000))
+                                .clickable {
+                                    useFrontCamera = !useFrontCamera
+                                    Toast.makeText(
+                                        context,
+                                        "Switched to ${if (useFrontCamera) "front" else "back"} camera (preview simulated)",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Cameraswitch,
+                                contentDescription = "Flip camera",
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
                             )
+                        }
+                    }
+
+                    // Lighting check indicator (below the oval guide)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (checkingLighting) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(
+                                    color = DashboardTerracotta,
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Checking lighting…",
+                                    fontSize = 13.sp,
+                                    color = DashboardCream
+                                )
+                            }
                         }
                     }
 
                     Spacer(modifier = Modifier.weight(1f))
 
-                    // Shutter / Capture Button
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Demo quick simulation button for testing in emulators without camera
-                        OutlinedButton(
-                            onClick = {
-                                if (isPose1) {
-                                    stage = VerificationStage.CAMERA_POSE_2
-                                    Toast.makeText(context, "Pose 1 recorded (Simulated)", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    stage = VerificationStage.ANALYZING
-                                }
-                            },
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = DashboardPeach),
-                            border = BorderStroke(1.dp, Color(0xFF42342D)),
-                            shape = RoundedCornerShape(12.dp)
+                    // Bottom action row — switches between Capture (when waiting) and Review (Retake / Use Photo)
+                    if (reviewingPose) {
+                        // Review actions — after a pose capture, before moving on
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Simulate Pose", fontSize = 13.sp)
-                        }
+                            OutlinedButton(
+                                onClick = {
+                                    // Retake — restart the current pose capture
+                                    if (isPose1) capturedPhoto1 = null else capturedPhoto2 = null
+                                    reviewingPose = false
+                                },
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = DashboardCream),
+                                border = BorderStroke(1.dp, DashboardCream.copy(alpha = 0.5f)),
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(52.dp)
+                            ) {
+                                Text(
+                                    text = "Retake",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
 
-                        // Real Camera Shutter
-                        Button(
-                            onClick = {
-                                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = DashboardTerracotta),
-                            shape = CircleShape,
-                            modifier = Modifier.size(68.dp),
-                            contentPadding = PaddingValues(0.dp)
+                            Button(
+                                onClick = {
+                                    // Use Photo — proceed to next pose / verification phase
+                                    reviewingPose = false
+                                    if (isPose1) {
+                                        stage = VerificationStage.CAMERA_POSE_2
+                                        Toast.makeText(context, "Pose 1 saved! Now complete Pose 2", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        stage = VerificationStage.ANALYZING
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = DashboardTerracotta,
+                                    contentColor = Color.White
+                                ),
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(52.dp)
+                            ) {
+                                Text(
+                                    text = "Use Photo",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    } else {
+                        // Capture actions
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Camera,
-                                contentDescription = "Capture Selfie",
-                                tint = Color.White,
-                                modifier = Modifier.size(32.dp)
-                            )
+                            // Demo quick simulation button for testing in emulators without camera
+                            OutlinedButton(
+                                onClick = {
+                                    if (isPose1) {
+                                        capturedPhoto1 = Bitmap.createBitmap(240, 300, Bitmap.Config.ARGB_8888)
+                                        reviewingPose = true
+                                        Toast.makeText(context, "Pose 1 captured (Simulated)", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        capturedPhoto2 = Bitmap.createBitmap(240, 300, Bitmap.Config.ARGB_8888)
+                                        reviewingPose = true
+                                        Toast.makeText(context, "Pose 2 captured (Simulated)", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                enabled = !checkingLighting,
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = DashboardPeach),
+                                border = BorderStroke(1.dp, Color(0xFF42342D)),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("Simulate Pose", fontSize = 13.sp)
+                            }
+
+                            // Real Camera Shutter
+                            Button(
+                                onClick = {
+                                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                },
+                                enabled = !checkingLighting,
+                                colors = ButtonDefaults.buttonColors(containerColor = DashboardTerracotta),
+                                shape = CircleShape,
+                                modifier = Modifier.size(68.dp),
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Camera,
+                                    contentDescription = "Capture Selfie",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                            }
                         }
                     }
 
@@ -535,7 +678,7 @@ fun FaceVerificationScreen(
                                     color = DashboardCream
                                 )
                                 Text(
-                                    text = "Your profile is boosted in Kerala discovery feeds.",
+                                    text = "Your profile is boosted in discovery feeds.",
                                     fontSize = 11.sp,
                                     color = DashboardNavMuted
                                 )
@@ -642,6 +785,43 @@ private fun VerificationBenefitItem(
                     fontSize = 12.sp,
                     color = DashboardNavMuted,
                     lineHeight = 16.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PrivacyExplainerCard(modifier: Modifier = Modifier) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = DashboardCard,
+        border = BorderStroke(1.dp, SuperBlue.copy(alpha = 0.4f)),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Lock,
+                contentDescription = null,
+                tint = SuperBlue,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Column {
+                Text(
+                    text = "Your selfies are never stored",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = DashboardCream
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Used only for one-time verification. Deleted immediately after.",
+                    fontSize = 11.sp,
+                    color = DashboardMutedBeige
                 )
             }
         }

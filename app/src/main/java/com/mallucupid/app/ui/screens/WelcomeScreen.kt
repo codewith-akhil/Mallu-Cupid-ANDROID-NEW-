@@ -71,7 +71,7 @@ fun WelcomeScreen(
             Spacer(modifier = Modifier.height(10.dp))
 
             Text(
-                text = "Meet someone special from Kerala",
+                text = "Meet someone special nearby",
                 color = Color.White.copy(alpha = 0.9f),
                 fontSize = 16.sp,
                 textAlign = TextAlign.Center

@@ -90,7 +90,7 @@ fun ExploreViewContent(
             count = 88,
             emoji = "🎓",
             gradientColors = listOf(Color(0xFFDCFCE7), Color(0xFFBBF7D0)),
-            description = "Campus singles across Kerala"
+            description = "Campus singles near you"
         ),
         ExploreSpaceItem(
             id = "night_owls",
@@ -117,7 +117,7 @@ fun ExploreViewContent(
             color = TinderTextPrimary
         )
         Text(
-            text = "Curated spaces to meet like-minded singles in Kerala",
+            text = "Curated spaces to meet like-minded singles nearby",
             fontSize = 13.sp,
             color = TinderTextSecondary
         )

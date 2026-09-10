@@ -4,16 +4,20 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -67,6 +71,23 @@ fun TinderSwipeableCardStack(
     onFirstImpression: ((DatingProfile) -> Unit)? = null
 ) {
     val coroutineScope = rememberCoroutineScope()
+
+    // First-launch drag-hint overlay (Feature #7): shown until user taps or 4s elapse.
+    var dragHintShown by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay(4000)
+        dragHintShown = true
+    }
+
+    // Pull-to-refresh (Feature #11): manual implementation using a vertical-drag
+    // pointerInput on the wrapping Box. Only consumes drags while the stack is
+    // empty so it never interferes with the active card's swipe gestures.
+    // TODO: needs build verification — if PullToRefreshBox from
+    // androidx.compose.material3.pulltorefresh (Material3 1.3+, BOM 2024.09.00)
+    // is available, prefer it over this manual version.
+    var pullDistance by remember { mutableStateOf(0f) }
+    var isPullRefreshing by remember { mutableStateOf(false) }
+    val pullThreshold = 220f
 
     val totalProfiles = profiles.size
     val activeProfile = if (totalProfiles > 0) profiles[currentIndex % totalProfiles] else null
@@ -143,6 +164,34 @@ fun TinderSwipeableCardStack(
         modifier = modifier
             .fillMaxSize()
             .padding(bottom = 72.dp)
+            // Feature #11: pull-to-refresh — only listens to vertical drag while
+            // the stack is empty (no active card to fight with for drag events).
+            .pointerInput(activeProfile == null) {
+                if (activeProfile == null) {
+                    detectVerticalDragGestures(
+                        onDragEnd = {
+                            if (pullDistance > pullThreshold && !isPullRefreshing) {
+                                pullDistance = 0f
+                                isPullRefreshing = true
+                                coroutineScope.launch {
+                                    delay(650) // simulate network refresh
+                                    onResetStack()
+                                    isPullRefreshing = false
+                                }
+                            } else {
+                                pullDistance = 0f
+                            }
+                        },
+                        onDragCancel = { pullDistance = 0f },
+                        onVerticalDrag = { change, dragAmount ->
+                            change.consume()
+                            if (dragAmount > 0f) {
+                                pullDistance = (pullDistance + dragAmount).coerceAtLeast(0f)
+                            }
+                        }
+                    )
+                }
+            }
     ) {
         if (activeProfile == null) {
             // Empty state when stack is exhausted
@@ -175,7 +224,7 @@ fun TinderSwipeableCardStack(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = "There are no more new profiles in Kerala matching your current filters.",
+                    text = "There are no more new profiles nearby matching your current filters.",
                     fontSize = 14.sp,
                     color = DashboardMutedBeige,
                     textAlign = TextAlign.Center,
@@ -502,6 +551,88 @@ fun TinderSwipeableCardStack(
                 )
             }
         }
+
+        // -------------------------------------------------------------
+        // Feature #11: Pull-to-refresh indicator (top center, below status bar
+        // because this whole Box is already inside the Dashboard's
+        // statusBarsPadding().navigationBarsPadding() container).
+        // -------------------------------------------------------------
+        val pullAlpha = (pullDistance / pullThreshold).coerceIn(0f, 1f)
+        if (pullAlpha > 0f || isPullRefreshing) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 18.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(
+                    color = DashboardTerracotta,
+                    strokeWidth = 2.5.dp,
+                    modifier = Modifier
+                        .size(28.dp)
+                        .graphicsLayer {
+                            alpha = if (isPullRefreshing) 1f else pullAlpha
+                        }
+                )
+            }
+        }
+
+        // -------------------------------------------------------------
+        // Feature #7: First-launch drag-hint overlay (only when a card is
+        // active and the hint has not yet been dismissed).
+        // Stays WITHIN the card area: this Box already sits inside the
+        // Dashboard's statusBarsPadding().navigationBarsPadding() container,
+        // and we add a 100.dp bottom padding so the action-button row stays
+        // tappable.
+        // -------------------------------------------------------------
+        if (!dragHintShown && activeProfile != null) {
+            val hintTransition = rememberInfiniteTransition(label = "dragHintFinger")
+            val fingerX by hintTransition.animateFloat(
+                initialValue = -80f,
+                targetValue = 80f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(durationMillis = 1200, easing = LinearEasing),
+                    repeatMode = RepeatMode.Reverse
+                ),
+                label = "fingerX"
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(bottom = 100.dp) // leave room for action buttons
+                    .background(Color.Black.copy(alpha = 0.45f))
+                    .clickable { dragHintShown = true }
+            ) {
+                Text(
+                    text = "👆",
+                    fontSize = 56.sp,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .graphicsLayer { translationX = fingerX }
+                )
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(top = 96.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Swipe right to like 👉",
+                        color = DashboardCream,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Swipe left to pass",
+                        color = DashboardMutedBeige,
+                        fontSize = 12.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -639,6 +770,17 @@ private fun CardLayer(
                     }
                 }
 
+                // Feature #9: "Photo x / y" counter, right-aligned below the progress bar
+                Text(
+                    text = "${photoIndex + 1} / ${profile.photos.size}",
+                    color = DashboardCream.copy(alpha = 0.8f),
+                    fontSize = 11.sp,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier
+                        .align(Alignment.End)
+                        .padding(end = 6.dp, top = 4.dp)
+                )
+
                 if (activeCategoryFilter != null) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Surface(
@@ -690,12 +832,47 @@ private fun CardLayer(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(7.dp)
-                            .clip(CircleShape)
-                            .background(DashboardTerracotta)
-                    )
+                    // Feature #8: online green dot with pulsing ring behind it
+                    Box(contentAlignment = Alignment.Center) {
+                        val pulseTransition = rememberInfiniteTransition(label = "onlinePulse")
+                        val pulseScale by pulseTransition.animateFloat(
+                            initialValue = 0.95f,
+                            targetValue = 1.3f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(durationMillis = 900, easing = LinearEasing),
+                                repeatMode = RepeatMode.Reverse
+                            ),
+                            label = "pulseScale"
+                        )
+                        val pulseAlpha by pulseTransition.animateFloat(
+                            initialValue = 0.9f,
+                            targetValue = 0f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(durationMillis = 900, easing = LinearEasing),
+                                repeatMode = RepeatMode.Reverse
+                            ),
+                            label = "pulseAlpha"
+                        )
+                        // Outer pulsing ring (fades + scales behind the dot)
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .graphicsLayer {
+                                    scaleX = pulseScale
+                                    scaleY = pulseScale
+                                    alpha = pulseAlpha
+                                }
+                                .clip(CircleShape)
+                                .background(TinderGreen)
+                        )
+                        // Solid online dot
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .clip(CircleShape)
+                                .background(TinderGreen)
+                        )
+                    }
                     Spacer(modifier = Modifier.width(7.dp))
                     Text(
                         text = "Recently active",
@@ -734,6 +911,26 @@ private fun CardLayer(
                         fontFamily = FontFamily.Serif,
                         fontWeight = FontWeight.Normal
                     )
+                    // Feature #8: Verified blue badge — small SuperBlue circle with white check,
+                    // placed right after the name/age row. Only shown when profile.isVerified.
+                    if (profile.isVerified) {
+                        Box(
+                            modifier = Modifier
+                                .size(18.dp)
+                                .clip(CircleShape)
+                                .background(SuperBlue)
+                                .border(2.dp, Color.White, CircleShape)
+                                .align(Alignment.Bottom),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "Verified",
+                                tint = Color.White,
+                                modifier = Modifier.size(12.dp)
+                            )
+                        }
+                    }
                 }
 
                 // Up arrow button to open expanded profile
@@ -790,7 +987,7 @@ private fun CardLayer(
                         border = BorderStroke(1.dp, DashboardTerracotta.copy(alpha = 0.6f))
                     ) {
                         Text(
-                            text = "Nakshatra: ${profile.astrologyStar} · Highly Compatible",
+                            text = "Star sign: ${profile.astrologyStar} · Highly Compatible",
                             color = DashboardCream,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,

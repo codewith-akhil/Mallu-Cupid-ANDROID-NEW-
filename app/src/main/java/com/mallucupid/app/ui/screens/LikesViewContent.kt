@@ -159,7 +159,7 @@ fun LikesViewContent(
                         Spacer(modifier = Modifier.height(8.dp))
 
                         Text(
-                            text = "Match instantly with singles in Kerala who have already swiped right on your profile.",
+                            text = "Match instantly with singles nearby who have already swiped right on your profile.",
                             fontSize = 14.sp,
                             color = TinderTextSecondary,
                             textAlign = TextAlign.Center,
@@ -346,7 +346,7 @@ fun LikesViewContent(
                     )
                     Spacer(modifier = Modifier.height(14.dp))
                     BenefitBullet("✓ See Who Likes You before swiping")
-                    BenefitBullet("✓ Daily curated Top Picks across Kerala")
+                    BenefitBullet("✓ Daily curated Top Picks near you")
                     BenefitBullet("✓ Priority Likes seen faster by singles")
                     BenefitBullet("✓ Unlimited Rewinds and zero ads")
                     BenefitBullet("✓ Free Super Likes every week")

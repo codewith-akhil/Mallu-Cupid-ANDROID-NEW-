@@ -19,6 +19,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -37,10 +38,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -75,6 +82,12 @@ fun EditProfileScreen(
 
     // Active target slot for single-photo replacement (null means append)
     var targetPhotoSlot by remember { mutableStateOf<Int?>(null) }
+
+    // Feature #6: Photo drag-to-reorder state (within the 3x3 grid)
+    var draggedPhotoIndex by remember { mutableStateOf<Int?>(null) }
+    var draggedPhotoOffset by remember { mutableStateOf(Offset.Zero) }
+    var dragTargetPhotoIndex by remember { mutableStateOf<Int?>(null) }
+    val photoSlotBounds = remember { mutableStateMapOf<Int, Rect>() }
 
     // Dialog & bottom sheet states
     var showLogoutConfirmDialog by remember { mutableStateOf(false) }
@@ -146,16 +159,19 @@ fun EditProfileScreen(
                         val address = addresses?.firstOrNull()
                         if (address != null) {
                             val city = address.locality ?: address.subAdminArea ?: address.adminArea
-                            val state = address.adminArea ?: "Kerala"
-                            val country = address.countryName ?: "India"
-                            detectedCity = listOfNotNull(city, state, country).distinct().joinToString(", ")
+                            val state = address.adminArea
+                            val country = address.countryName
+                            detectedCity = listOfNotNull(city, state, country)
+                                .filter { it.isNotBlank() }
+                                .distinct()
+                                .joinToString(", ")
                         }
                     } catch (_: Exception) {}
                 }
 
                 if (detectedCity.isNullOrBlank()) {
-                    // Fallback to Kerala prime hub if emulator or indoor GPS has no fix
-                    detectedCity = "Kochi, Kerala, India"
+                    // Fallback to a neutral default if emulator or indoor GPS has no fix
+                    detectedCity = "Your city, your country"
                 }
 
                 withContext(Dispatchers.Main) {
@@ -165,9 +181,9 @@ fun EditProfileScreen(
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    draft = draft.copy(city = "Kochi, Kerala, India")
+                    draft = draft.copy(city = "Your city, your country")
                     isFetchingLocation = false
-                    locationFeedbackMessage = "Detected: Kochi, Kerala, India"
+                    locationFeedbackMessage = "Location detection failed. Please enter your city manually."
                 }
             }
         }
@@ -314,7 +330,7 @@ fun EditProfileScreen(
         containerColor = DashboardBg
     ) { paddingValues ->
         if (selectedTab == "Preview") {
-            // Live Preview of how other Kerala singles see the user
+            // Live Preview of how other singles nearby see the user
             val previewProfile = DatingProfile(
                 id = "user_preview",
                 name = draft.name.ifBlank { "Akhil" },
@@ -374,8 +390,7 @@ fun EditProfileScreen(
                     icon = Icons.Default.AddPhotoAlternate
                 ) {
                     Column {
-                        // 3x3 Grid of photo slots
-                        val totalSlots = 9
+                        // 3x3 Grid of photo slots — Feature #6: long-press & drag filled slots to reorder
                         for (row in 0 until 3) {
                             Row(
                                 modifier = Modifier
@@ -386,17 +401,78 @@ fun EditProfileScreen(
                                 for (col in 0 until 3) {
                                     val slotIndex = row * 3 + col
                                     val photoUrl = draft.photos.getOrNull(slotIndex)
+                                    val isDragged = slotIndex == draggedPhotoIndex
+                                    val isDropTarget = draggedPhotoIndex != null && slotIndex == dragTargetPhotoIndex
 
                                     Box(
                                         modifier = Modifier
                                             .weight(1f)
                                             .aspectRatio(0.78f)
+                                            .graphicsLayer(
+                                                translationX = if (isDragged) draggedPhotoOffset.x else 0f,
+                                                translationY = if (isDragged) draggedPhotoOffset.y else 0f,
+                                                shadowElevation = if (isDragged) 16f else 0f,
+                                                alpha = if (isDragged) 0.92f else 1f
+                                            )
                                             .clip(RoundedCornerShape(14.dp))
                                             .background(Color(0xFF261E1A))
                                             .border(
                                                 width = 1.dp,
-                                                color = if (photoUrl != null) DashboardPeach.copy(alpha = 0.3f) else Color(0xFF3F322B),
+                                                color = when {
+                                                    photoUrl != null && isDragged -> DashboardPeach
+                                                    photoUrl != null && isDropTarget -> TinderGold
+                                                    photoUrl != null -> DashboardPeach.copy(alpha = 0.3f)
+                                                    else -> Color(0xFF3F322B)
+                                                },
                                                 shape = RoundedCornerShape(14.dp)
+                                            )
+                                            .then(
+                                                if (photoUrl != null) {
+                                                    // Track each filled slot's window bounds & detect long-press drag to reorder
+                                                    Modifier
+                                                        .onGloballyPositioned { coords ->
+                                                            photoSlotBounds[slotIndex] = coords.boundsInWindow()
+                                                        }
+                                                        .pointerInput(slotIndex) {
+                                                            detectDragGesturesAfterLongPress(
+                                                                onDragStart = {
+                                                                    draggedPhotoIndex = slotIndex
+                                                                    draggedPhotoOffset = Offset.Zero
+                                                                    dragTargetPhotoIndex = slotIndex
+                                                                },
+                                                                onDrag = { change, dragAmount ->
+                                                                    change.consume()
+                                                                    draggedPhotoOffset = draggedPhotoOffset + dragAmount
+                                                                    val draggedCenter = photoSlotBounds[slotIndex]?.center
+                                                                    if (draggedCenter != null) {
+                                                                        val pointer = draggedCenter + draggedPhotoOffset
+                                                                        dragTargetPhotoIndex = photoSlotBounds.entries
+                                                                            .firstOrNull { (_, rect) -> rect.contains(pointer) }
+                                                                            ?.key
+                                                                    }
+                                                                },
+                                                                onDragEnd = {
+                                                                    val from = draggedPhotoIndex
+                                                                    val to = dragTargetPhotoIndex
+                                                                    if (from != null && to != null && from != to && to < draft.photos.size) {
+                                                                        val updated = draft.photos.toMutableList()
+                                                                        val tmp = updated[from]
+                                                                        updated[from] = updated[to]
+                                                                        updated[to] = tmp
+                                                                        draft = draft.copy(photos = updated)
+                                                                    }
+                                                                    draggedPhotoIndex = null
+                                                                    draggedPhotoOffset = Offset.Zero
+                                                                    dragTargetPhotoIndex = null
+                                                                },
+                                                                onDragCancel = {
+                                                                    draggedPhotoIndex = null
+                                                                    draggedPhotoOffset = Offset.Zero
+                                                                    dragTargetPhotoIndex = null
+                                                                }
+                                                            )
+                                                        }
+                                                } else Modifier
                                             )
                                             .clickable {
                                                 targetPhotoSlot = slotIndex
@@ -414,24 +490,49 @@ fun EditProfileScreen(
                                                 contentScale = ContentScale.Crop
                                             )
 
-                                            // Main photo indicator for slot 0
-                                            if (slotIndex == 0) {
-                                                Surface(
-                                                    shape = RoundedCornerShape(bottomEnd = 10.dp),
-                                                    color = DashboardTerracotta,
-                                                    modifier = Modifier.align(Alignment.TopStart)
-                                                ) {
-                                                    Text(
-                                                        text = "MAIN",
-                                                        fontSize = 9.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = Color.White,
-                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            // Drag handle (top-left) for every filled photo slot — small dark circle background
+                                            Surface(
+                                                shape = CircleShape,
+                                                color = Color(0xCC201B18),
+                                                border = BorderStroke(1.dp, Color(0xFF42342D)),
+                                                modifier = Modifier
+                                                    .align(Alignment.TopStart)
+                                                    .padding(4.dp)
+                                                    .size(26.dp)
+                                            ) {
+                                                Box(contentAlignment = Alignment.Center) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.DragHandle,
+                                                        contentDescription = "Drag to reorder",
+                                                        tint = DashboardNavMuted,
+                                                        modifier = Modifier.size(18.dp)
                                                     )
                                                 }
                                             }
 
-                                            // Delete photo button
+                                            // Primary star badge (top-right) for the FIRST slot — replaces the previous "MAIN" text badge
+                                            if (slotIndex == 0) {
+                                                Surface(
+                                                    shape = CircleShape,
+                                                    color = Color(0xCC201B18),
+                                                    border = BorderStroke(1.dp, TinderGold.copy(alpha = 0.7f)),
+                                                    modifier = Modifier
+                                                        .align(Alignment.TopEnd)
+                                                        .padding(4.dp)
+                                                        .size(22.dp)
+                                                ) {
+                                                    Box(contentAlignment = Alignment.Center) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Star,
+                                                            contentDescription = "Primary photo",
+                                                            tint = TinderGold,
+                                                            modifier = Modifier.size(14.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+
+                                            // Delete photo button (top-right corner for slots 1+; just below the star for slot 0)
                                             Surface(
                                                 onClick = {
                                                     val updatedList = draft.photos.toMutableList()
@@ -446,7 +547,9 @@ fun EditProfileScreen(
                                                 modifier = Modifier
                                                     .align(Alignment.TopEnd)
                                                     .padding(4.dp)
-                                                    .size(24.dp)
+                                                    .then(if (slotIndex == 0) Modifier.padding(top = 28.dp) else Modifier)
+                                                    // Touch target enlarged to 44dp accessibility minimum (icon stays 14dp)
+                                                    .size(44.dp)
                                             ) {
                                                 Box(contentAlignment = Alignment.Center) {
                                                     Icon(
@@ -474,7 +577,7 @@ fun EditProfileScreen(
                                                 )
                                             }
                                         } else {
-                                            // Empty slot with + button
+                                            // Empty slot with + button (Add photo — non-draggable)
                                             Column(
                                                 horizontalAlignment = Alignment.CenterHorizontally,
                                                 verticalArrangement = Arrangement.Center
@@ -496,6 +599,27 @@ fun EditProfileScreen(
                                     }
                                 }
                             }
+                        }
+
+                        // Helper hint for drag-to-reorder discoverability
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = null,
+                                tint = DashboardNavMuted,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Long-press a photo to drag and reorder. First slot is your primary photo.",
+                                fontSize = 11.sp,
+                                color = DashboardNavMuted
+                            )
                         }
 
                         Spacer(modifier = Modifier.height(6.dp))
@@ -638,7 +762,7 @@ fun EditProfileScreen(
                             modifier = Modifier.fillMaxWidth(),
                             placeholder = {
                                 Text(
-                                    "Tell Kerala singles about your interests, vibe, favorite sulaimani spot or weekend plans...",
+                                    "Tell singles nearby about your interests, vibe, favorite coffee spot or weekend plans...",
                                     color = DashboardNavMuted,
                                     fontSize = 13.sp
                                 )
@@ -686,7 +810,7 @@ fun EditProfileScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "View \"About Me\" tips for Kerala singles",
+                                text = "View \"About Me\" tips",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = DashboardPeach
@@ -794,7 +918,7 @@ fun EditProfileScreen(
                 // ==========================================
                 DashboardSectionCard(
                     title = "Current City & Location",
-                    subtitle = "Used to show accurate distance to nearby singles in Kerala",
+                    subtitle = "Used to show accurate distance to nearby singles",
                     icon = Icons.Default.LocationOn
                 ) {
                     Column {
@@ -802,7 +926,7 @@ fun EditProfileScreen(
                             value = draft.city,
                             onValueChange = { draft = draft.copy(city = it) },
                             modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text("e.g. Kochi, Kerala, India", color = DashboardNavMuted) },
+                            placeholder = { Text("e.g. London, United Kingdom", color = DashboardNavMuted) },
                             leadingIcon = {
                                 Icon(
                                     imageVector = Icons.Default.Place,
@@ -884,7 +1008,7 @@ fun EditProfileScreen(
                         DarkLabeledTextField(
                             label = "College / University Name",
                             value = draft.college,
-                            placeholder = "e.g. Govt Polytechnic College, NIT Calicut",
+                            placeholder = "e.g. Community College, State University",
                             icon = Icons.Default.AccountBalance,
                             onValueChange = { draft = draft.copy(college = it) }
                         )
@@ -911,7 +1035,7 @@ fun EditProfileScreen(
                         DarkLabeledTextField(
                             label = "Company Name",
                             value = draft.company,
-                            placeholder = "e.g. Metric Flux Solutions, Infopark Kochi",
+                            placeholder = "e.g. Acme Solutions, Downtown Hub",
                             icon = Icons.Default.Business,
                             onValueChange = { draft = draft.copy(company = it) }
                         )
@@ -1129,7 +1253,7 @@ fun EditProfileScreen(
                     Column {
                         GroupedActionRow(
                             title = "Dating Safety & Tips",
-                            subtitle = "Tips for safe and enjoyable dates in Kerala",
+                            subtitle = "Tips for safe and enjoyable dates",
                             icon = Icons.Default.Shield,
                             onClick = {
                                 helpDialogTopic = "Safety & Dating Tips"
@@ -1315,21 +1439,21 @@ fun EditProfileScreen(
             text = {
                 val content = when (helpDialogTopic) {
                     "Safety & Dating Tips" -> """
-                        • Always meet in crowded public places for initial dates (e.g. Fort Kochi cafes, Lulu Mall, Calicut beach).
+                        • Always meet in crowded public places for initial dates (e.g. downtown cafes, shopping malls, the waterfront).
                         • Inform a close friend or family member of your whereabouts.
                         • Never share one-time passwords (OTP), banking details, or financial credentials.
                         • Respect personal boundaries and cultural preferences.
                         • Report and block any suspicious or inappropriate profiles immediately.
                     """.trimIndent()
                     "Community Guidelines" -> """
-                        • MalluCupid is dedicated to kind, authentic connections for Kerala singles.
+                        • MalluCupid is dedicated to kind, authentic connections for singles nearby.
                         • Zero tolerance for hate speech, harassment, nudity, or fake accounts.
                         • Treat every person with respect and dignity regardless of background.
                         • Keep chats friendly, respectful, and consensual.
                     """.trimIndent()
                     else -> """
                         • Need help with your account or profile verification?
-                        • Email our Kerala support team at: support@mallucupid.app
+                        • Email our support team at: support@mallucupid.app
                         • Response time: Within 24 hours.
                         • Available 7 days a week.
                     """.trimIndent()
@@ -1421,7 +1545,7 @@ fun EditProfileScreen(
             },
             text = {
                 Text(
-                    text = "• Highlight your genuine interests (e.g. Malayalam cinema, road trips to Munnar/Wayanad, favorite foods).\n\n" +
+                    text = "• Highlight your genuine interests (e.g. favorite films, road trips to the hills, favorite foods).\n\n" +
                             "• Keep it positive, conversational, and under the 350-character limit.\n\n" +
                             "• Mention what kind of connection you are excited to find.\n\n" +
                             "• A witty one-liner makes a great conversation starter!",

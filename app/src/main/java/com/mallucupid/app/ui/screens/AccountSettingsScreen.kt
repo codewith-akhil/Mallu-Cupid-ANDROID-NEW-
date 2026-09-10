@@ -226,7 +226,7 @@ fun AccountSettingsScreen(
                     // ==========================================
                     SettingsSectionCard(
                         title = "Discovery Management",
-                        subtitle = "Control who you see and how far Cupid searches in Kerala",
+                        subtitle = "Control who you see and how far Cupid searches nearby",
                         icon = Icons.Default.TravelExplore
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -498,7 +498,7 @@ fun AccountSettingsScreen(
                                             color = DashboardCream
                                         )
                                         Text(
-                                            text = if (draft.isOnline) "Active now in Kerala singles feed" else "Appear offline to all matches",
+                                            text = if (draft.isOnline) "Active now in the nearby singles feed" else "Appear offline to all matches",
                                             fontSize = 11.sp,
                                             color = DashboardNavMuted
                                         )
@@ -1175,7 +1175,7 @@ fun DeleteAccountScreen(
     val reasons = listOf(
         "Found someone special on Mallu Cupid",
         "Taking a break from dating apps",
-        "Not getting quality matches in Kerala",
+        "Not getting quality matches nearby",
         "Privacy and security concerns",
         "Starting over with a new profile",
         "Other reason"
@@ -1268,7 +1268,7 @@ fun DeleteAccountScreen(
                 color = DashboardCream
             )
             Text(
-                text = "Select your main reason to help us improve the experience for Kerala singles:",
+                text = "Select your main reason to help us improve the experience for singles nearby:",
                 fontSize = 12.sp,
                 color = DashboardNavMuted
             )

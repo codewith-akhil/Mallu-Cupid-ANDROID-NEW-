@@ -30,8 +30,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -52,6 +54,8 @@ fun DashboardScreen(
     onSignOut: () -> Unit
 ) {
     val profiles = remember { mutableStateListOf(*SampleProfiles.list.toTypedArray()) }
+    val haptic = LocalHapticFeedback.current
+    val unreadChatCount = 2 // TODO: replace static demo count with real unread-chats state from ChatViewModel
     var currentDraft by remember { mutableStateOf(userDraft) }
     var showEditProfileScreen by remember { mutableStateOf(false) }
     var showAccountSettingsScreen by remember { mutableStateOf(false) }
@@ -159,7 +163,7 @@ fun DashboardScreen(
         when (activeSystemScreen) {
             "LOADING" -> {
                 LoadingStateScreen(
-                    message = "Connecting to singles in Kochi, Calicut & Trivandrum...",
+                    message = "Connecting to singles nearby...",
                     onCancel = { activeSystemScreen = null }
                 )
                 return
@@ -309,7 +313,7 @@ fun DashboardScreen(
                     onSelectCategory = { cat ->
                         activeCategoryFilter = cat
                         activeNav = "Swipe"
-                        actionToast = "Showing $cat in Kerala"
+                        actionToast = "Showing $cat nearby"
                     }
                 )
             }
@@ -398,28 +402,77 @@ fun DashboardScreen(
 
                 navItems.forEach { item ->
                     val isActive = activeNav == item.label
-                    Column(
+                    // Sliding pill background behind active tab — color animates via spring when isActive flips.
+                    val pillColor by animateColorAsState(
+                        targetValue = if (isActive) DashboardTerracotta.copy(alpha = 0.18f) else Color.Transparent,
+                        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+                        label = "navPillColor"
+                    )
+                    // Smoothly interpolated icon & label colors instead of an if/else snap.
+                    val iconColor by animateColorAsState(
+                        targetValue = if (isActive) TinderCoral else DashboardNavMuted,
+                        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+                        label = "navIconColor"
+                    )
+                    val labelColor by animateColorAsState(
+                        targetValue = if (isActive) Color.White else DashboardNavMuted,
+                        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
+                        label = "navLabelColor"
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = pillColor,
+                        tonalElevation = 0.dp,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(14.dp))
                             .clickable {
+                                // Haptic tick fires BEFORE the active nav state mutates.
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 activeNav = item.label
                             }
-                            .padding(horizontal = 14.dp, vertical = 6.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
                     ) {
-                        Text(
-                            text = item.icon,
-                            fontSize = 21.sp,
-                            color = if (isActive) TinderCoral else DashboardNavMuted
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = item.label,
-                            fontSize = 10.sp,
-                            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-                            color = if (isActive) Color.White else DashboardNavMuted
-                        )
+                        Column(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Box(contentAlignment = Alignment.TopEnd) {
+                                Text(
+                                    text = item.icon,
+                                    fontSize = 21.sp,
+                                    color = iconColor
+                                )
+                                // Unread badge for the Chat tab — kept inside the icon's Box so it
+                                // can never clip outside the 68.dp nav height or system nav bar.
+                                if (item.label == "Chat" && unreadChatCount > 0) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = TinderCoral,
+                                        modifier = Modifier
+                                            .size(14.dp)
+                                            .offset(x = 4.dp, y = (-2).dp)
+                                            .border(1.2.dp, DashboardBg, CircleShape)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Text(
+                                                text = unreadChatCount.toString(),
+                                                color = Color.White,
+                                                fontSize = 8.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                textAlign = TextAlign.Center
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = item.label,
+                                fontSize = 10.sp,
+                                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                                color = labelColor
+                            )
+                        }
                     }
                 }
             }
@@ -508,10 +561,10 @@ private fun TinderActionButton(
 @Composable
 private fun ExploreView(onSelectCategory: (String) -> Unit) {
     val categories = listOf(
-        ExploreCategory("Kochi Nightlife", "Cocktails, Marine drive & late dinners", "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=600&q=80"),
-        ExploreCategory("Munnar Trekkers", "Mountain road trips & scenic views", "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=600&q=80"),
-        ExploreCategory("Kozhikode Foodies", "Halwa, biryani & Calicut beach sunset talks", "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=600&q=80"),
-        ExploreCategory("Bangalore Malayalis", "Weekend return trips to Kerala", "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=600&q=80")
+        ExploreCategory("Downtown Nights", "Cocktails, the waterfront & late dinners", "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=600&q=80"),
+        ExploreCategory("Hill Country Trekkers", "Mountain road trips & scenic views", "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=600&q=80"),
+        ExploreCategory("Coastal Foodies", "Street food, brunch & beach sunset talks", "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=600&q=80"),
+        ExploreCategory("City Creatives", "Weekend road trips & meetups nearby", "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=600&q=80")
     )
 
     Column(
@@ -521,7 +574,7 @@ private fun ExploreView(onSelectCategory: (String) -> Unit) {
             .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
         Text(
-            text = "Explore Kerala",
+            text = "Explore Nearby",
             color = DashboardCream,
             fontSize = 28.sp,
             fontWeight = FontWeight.Bold,
@@ -610,7 +663,7 @@ private fun LikesView(
             fontFamily = FontFamily.Serif
         )
         Text(
-            text = "People in Kerala who swiped right on your profile",
+            text = "People nearby who swiped right on your profile",
             color = DashboardCream.copy(alpha = 0.7f),
             fontSize = 14.sp
         )
@@ -686,9 +739,9 @@ private fun ChatListView(profiles: List<DatingProfile>) {
     val messages = remember {
         mutableStateListOf(
             "Hey! Saw your profile, love your vibe!",
-            "Thank you! Which part of Kochi are you staying in?",
-            "Near Fort Kochi! Love the cafes around here.",
-            "Awesome! Have you visited Kashi Art Cafe recently?"
+            "Thank you! Which part of town are you staying in?",
+            "Downtown! Love the cafes around here.",
+            "Awesome! Have you checked out that new cafe on the corner?"
         )
     }
 
@@ -1021,7 +1074,7 @@ private fun UserProfileView(
                             fontFamily = FontFamily.Serif
                         )
                         Text(
-                            text = "⌖ ${userDraft.city.ifBlank { "Kochi" }} · Seeking ${userDraft.lookingFor.ifBlank { "Women" }}",
+                            text = "⌖ ${userDraft.city.ifBlank { "Your city" }} · Seeking ${userDraft.lookingFor.ifBlank { "Women" }}",
                             color = DashboardPeach,
                             fontSize = 13.sp
                         )
@@ -1183,7 +1236,7 @@ private fun FilterSheetContent(
             fontFamily = FontFamily.Serif
         )
         Text(
-            text = "Filter matches based in Kerala",
+            text = "Filter matches near you",
             color = DashboardCream.copy(alpha = 0.65f),
             fontSize = 13.sp
         )

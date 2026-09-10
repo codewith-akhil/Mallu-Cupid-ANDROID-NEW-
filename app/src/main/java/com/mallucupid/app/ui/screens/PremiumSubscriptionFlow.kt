@@ -171,7 +171,7 @@ fun PremiumSubscriptionFlow(
                                 Spacer(modifier = Modifier.height(4.dp))
 
                                 Text(
-                                    text = "Kerala's #1 Dating Experience",
+                                    text = "#1 Dating Experience",
                                     fontSize = 13.sp,
                                     color = DashboardPeach
                                 )
@@ -232,7 +232,7 @@ fun PremiumSubscriptionFlow(
                                 icon = Icons.Default.Favorite,
                                 iconColor = NopeCoral,
                                 title = "Unlimited Likes",
-                                description = "Swipe on as many Kerala profiles as your heart desires with zero daily limits."
+                                description = "Swipe on as many nearby profiles as your heart desires with zero daily limits."
                             )
                             PremiumPerkCard(
                                 icon = Icons.Default.Visibility,
@@ -244,7 +244,7 @@ fun PremiumSubscriptionFlow(
                                 icon = Icons.Default.ChatBubble,
                                 iconColor = SuperBlue,
                                 title = "Unlimited Chat",
-                                description = "Message and video/photo share freely with any match across Kerala anytime."
+                                description = "Message and video/photo share freely with any match nearby anytime."
                             )
                             PremiumPerkCard(
                                 icon = Icons.Default.Replay,
