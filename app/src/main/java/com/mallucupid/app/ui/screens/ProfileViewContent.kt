@@ -31,12 +31,12 @@ import com.mallucupid.app.ui.theme.*
 fun ProfileViewContent(
     userDraft: OnboardingDraft,
     onEditProfile: () -> Unit,
+    onOpenSettings: () -> Unit,
     onSignOut: () -> Unit
 ) {
     val scrollState = rememberScrollState()
     var subscriptionCardIndex by remember { mutableIntStateOf(0) } // 0: Plus, 1: Gold, 2: Platinum
     var showFeaturesModal by remember { mutableStateOf(false) }
-    var showSettingsModal by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -45,7 +45,7 @@ fun ProfileViewContent(
             .padding(bottom = 76.dp)
             .verticalScroll(scrollState)
     ) {
-        // Top Bar with Settings icon (Matches screenshot 12)
+        // Top Bar with Settings icon (Navigates to Account Settings)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -53,10 +53,10 @@ fun ProfileViewContent(
             horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = { showSettingsModal = true }) {
+            IconButton(onClick = onOpenSettings) {
                 Icon(
                     imageVector = Icons.Default.Settings,
-                    contentDescription = "Settings",
+                    contentDescription = "Account Settings",
                     tint = TinderTextSecondary,
                     modifier = Modifier.size(26.dp)
                 )
@@ -336,33 +336,6 @@ fun ProfileViewContent(
         }
 
         Spacer(modifier = Modifier.height(30.dp))
-    }
-
-    // Settings Modal Dialog
-    if (showSettingsModal) {
-        AlertDialog(
-            onDismissRequest = { showSettingsModal = false },
-            title = { Text("Settings", fontWeight = FontWeight.Bold, color = TinderTextPrimary) },
-            text = {
-                Column {
-                    Text("• App: Mallu Cupid v2.4", color = TinderTextPrimary)
-                    Text("• Account: ${userDraft.name}", color = TinderTextPrimary)
-                    Text("• Discovery Location: ${userDraft.city}", color = TinderTextPrimary)
-                    Text("• Maximum Distance: ${userDraft.distance} km", color = TinderTextPrimary)
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text("Kerala's dedicated dating community.", color = TinderTextSecondary, fontSize = 12.sp)
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = { showSettingsModal = false },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.Black)
-                ) {
-                    Text("Close", color = Color.White)
-                }
-            },
-            containerColor = TinderSurface
-        )
     }
 
     // Full Features Comparison Modal

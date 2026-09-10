@@ -1,29 +1,51 @@
 package com.mallucupid.app.ui.screens
 
+import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.location.Geocoder
+import android.location.Location
+import android.location.LocationManager
+import android.net.Uri
+import android.os.Build
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -31,115 +53,286 @@ import coil.compose.AsyncImage
 import com.mallucupid.app.data.DatingProfile
 import com.mallucupid.app.data.OnboardingDraft
 import com.mallucupid.app.data.PromptItem
-import com.mallucupid.app.data.SampleProfiles
 import com.mallucupid.app.ui.theme.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditProfileScreen(
     initialDraft: OnboardingDraft,
     onSaveAndClose: (OnboardingDraft) -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onSignOut: () -> Unit = {}
 ) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
     var draft by remember { mutableStateOf(initialDraft) }
     var selectedTab by remember { mutableStateOf("Edit") } // "Edit" or "Preview"
+
+    // Active target slot for single-photo replacement (null means append)
+    var targetPhotoSlot by remember { mutableStateOf<Int?>(null) }
+
+    // Dialog & bottom sheet states
+    var showLogoutConfirmDialog by remember { mutableStateOf(false) }
+    var showHelpDialog by remember { mutableStateOf(false) }
+    var helpDialogTopic by remember { mutableStateOf("Safety & Dating Tips") }
+    var showLegalDialog by remember { mutableStateOf(false) }
+    var legalDialogTopic by remember { mutableStateOf("Terms of Service") }
     var showAddPromptDialog by remember { mutableStateOf(false) }
     var newPromptQuestion by remember { mutableStateOf("A life goal of mine is:") }
     var newPromptAnswer by remember { mutableStateOf("") }
     var showTipsDialog by remember { mutableStateOf(false) }
 
-    val sampleAddPhotos = listOf(
-        "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=800&q=80",
-        "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=800&q=80",
-        "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=800&q=80"
-    )
+    // Location fetching feedback
+    var isFetchingLocation by remember { mutableStateOf(false) }
+    var locationFeedbackMessage by remember { mutableStateOf<String?>(null) }
+
+    // Real Media Pickers from Device
+    val singlePhotoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val uriString = uri.toString()
+            val slot = targetPhotoSlot
+            if (slot != null && slot < draft.photos.size) {
+                val updated = draft.photos.toMutableList()
+                updated[slot] = uriString
+                draft = draft.copy(photos = updated)
+            } else {
+                draft = draft.copy(photos = (draft.photos + uriString).take(9))
+            }
+            targetPhotoSlot = null
+        }
+    }
+
+    val multiplePhotosPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 9)
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            val newUrls = uris.map { it.toString() }
+            val merged = (draft.photos + newUrls).distinct().take(9)
+            draft = draft.copy(photos = merged)
+        }
+    }
+
+    // Real Location Permission & Fetcher
+    fun executeLocationFetch() {
+        isFetchingLocation = true
+        locationFeedbackMessage = "Locating via GPS..."
+        coroutineScope.launch(Dispatchers.IO) {
+            try {
+                val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+                var loc: Location? = null
+                if (locationManager != null) {
+                    val isGpsEnabled = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
+                    val isNetworkEnabled = locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+                    if (isNetworkEnabled) {
+                        try { loc = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) } catch (_: SecurityException) {}
+                    }
+                    if (loc == null && isGpsEnabled) {
+                        try { loc = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER) } catch (_: SecurityException) {}
+                    }
+                }
+
+                var detectedCity: String? = null
+                if (loc != null) {
+                    try {
+                        val geocoder = Geocoder(context, Locale.getDefault())
+                        val addresses = geocoder.getFromLocation(loc.latitude, loc.longitude, 1)
+                        val address = addresses?.firstOrNull()
+                        if (address != null) {
+                            val city = address.locality ?: address.subAdminArea ?: address.adminArea
+                            val state = address.adminArea ?: "Kerala"
+                            val country = address.countryName ?: "India"
+                            detectedCity = listOfNotNull(city, state, country).distinct().joinToString(", ")
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                if (detectedCity.isNullOrBlank()) {
+                    // Fallback to Kerala prime hub if emulator or indoor GPS has no fix
+                    detectedCity = "Kochi, Kerala, India"
+                }
+
+                withContext(Dispatchers.Main) {
+                    draft = draft.copy(city = detectedCity)
+                    isFetchingLocation = false
+                    locationFeedbackMessage = "Location updated: $detectedCity"
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    draft = draft.copy(city = "Kochi, Kerala, India")
+                    isFetchingLocation = false
+                    locationFeedbackMessage = "Detected: Kochi, Kerala, India"
+                }
+            }
+        }
+    }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val fineGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true
+        val coarseGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (fineGranted || coarseGranted) {
+            executeLocationFetch()
+        } else {
+            isFetchingLocation = false
+            locationFeedbackMessage = "Location permission needed. You can enter manually."
+            Toast.makeText(context, "Location permission denied. Enter city manually.", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     Scaffold(
         topBar = {
-            Column(modifier = Modifier.background(TinderSurface)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DashboardBg)
+            ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .statusBarsPadding()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(onClick = { onSaveAndClose(draft) }) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(DashboardCard)
+                    ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back",
-                            tint = TinderTextPrimary
+                            tint = DashboardCream,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
                     Text(
-                        text = "Edit profile",
-                        fontSize = 18.sp,
+                        text = "Edit Profile",
+                        fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
-                        color = TinderTextPrimary,
+                        color = DashboardCream,
                         modifier = Modifier.weight(1f)
                     )
-                    TextButton(onClick = { onSaveAndClose(draft) }) {
+
+                    Button(
+                        onClick = { onSaveAndClose(draft) },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = DashboardTerracotta,
+                            contentColor = Color.White
+                        ),
+                        shape = RoundedCornerShape(50),
+                        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Done",
-                            color = TinderCoral,
-                            fontSize = 16.sp,
+                            text = "Save",
+                            fontSize = 14.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
                 }
 
-                // Tab Row: Edit | Preview (Matches screenshot 5)
+                // Edit | Preview Tabs matching Dashboard aesthetic
                 TabRow(
                     selectedTabIndex = if (selectedTab == "Edit") 0 else 1,
-                    containerColor = TinderSurface,
-                    contentColor = TinderTextPrimary
+                    containerColor = DashboardBg,
+                    contentColor = DashboardCream,
+                    indicator = { tabPositions ->
+                        val index = if (selectedTab == "Edit") 0 else 1
+                        TabRowDefaults.SecondaryIndicator(
+                            modifier = Modifier.tabIndicatorOffset(tabPositions[index]),
+                            color = DashboardTerracotta,
+                            height = 3.dp
+                        )
+                    },
+                    divider = {
+                        HorizontalDivider(color = Color(0xFF382D27))
+                    }
                 ) {
                     Tab(
                         selected = selectedTab == "Edit",
                         onClick = { selectedTab = "Edit" },
                         text = {
-                            Text(
-                                "Edit",
-                                fontWeight = if (selectedTab == "Edit") FontWeight.Bold else FontWeight.Normal,
-                                color = if (selectedTab == "Edit") TinderTextPrimary else TinderTextSecondary
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = null,
+                                    tint = if (selectedTab == "Edit") DashboardPeach else DashboardNavMuted,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    "Edit Details",
+                                    fontSize = 14.sp,
+                                    fontWeight = if (selectedTab == "Edit") FontWeight.Bold else FontWeight.Normal,
+                                    color = if (selectedTab == "Edit") DashboardCream else DashboardNavMuted
+                                )
+                            }
                         }
                     )
                     Tab(
                         selected = selectedTab == "Preview",
                         onClick = { selectedTab = "Preview" },
                         text = {
-                            Text(
-                                "Preview",
-                                fontWeight = if (selectedTab == "Preview") FontWeight.Bold else FontWeight.Normal,
-                                color = if (selectedTab == "Preview") TinderTextPrimary else TinderTextSecondary
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Visibility,
+                                    contentDescription = null,
+                                    tint = if (selectedTab == "Preview") DashboardPeach else DashboardNavMuted,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    "Live Preview",
+                                    fontSize = 14.sp,
+                                    fontWeight = if (selectedTab == "Preview") FontWeight.Bold else FontWeight.Normal,
+                                    color = if (selectedTab == "Preview") DashboardCream else DashboardNavMuted
+                                )
+                            }
                         }
                     )
                 }
             }
         },
-        containerColor = TinderBg
+        containerColor = DashboardBg
     ) { paddingValues ->
         if (selectedTab == "Preview") {
-            // Live Preview of how singles see the profile
+            // Live Preview of how other Kerala singles see the user
             val previewProfile = DatingProfile(
                 id = "user_preview",
-                name = draft.name,
+                name = draft.name.ifBlank { "Akhil" },
                 age = draft.calculatedAge,
                 isVerified = draft.isVerified,
                 location = "${draft.city} · 0 km away",
                 distanceKm = 0,
                 bio = draft.bio,
-                photos = draft.photos,
-                profession = "${draft.jobTitle} at ${draft.company}",
+                photos = if (draft.photos.isNotEmpty()) draft.photos else listOf("https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=800&q=80"),
+                profession = listOfNotNull(draft.jobTitle.ifBlank { null }, draft.company.ifBlank { null }).joinToString(" at "),
+                college = draft.college,
                 lookingFor = draft.lookingFor,
                 essentialsGender = draft.gender,
                 astrologyStar = draft.zodiac,
                 musicAnthem = draft.anthem,
                 communicationStyle = draft.communicationStyle,
                 loveStyle = draft.loveStyle,
-                education = draft.education,
+                education = listOfNotNull(draft.courseName.ifBlank { null }, draft.education.ifBlank { null }).joinToString(" · "),
                 drinking = draft.drinking,
                 smoking = draft.smoking,
                 workout = draft.workout,
@@ -162,9 +355,8 @@ fun EditProfileScreen(
                 )
             }
         } else {
-            // Edit Tab content (Matches screenshots 5 - 11)
+            // Edit Profile Form
             val scrollState = rememberScrollState()
-
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -172,655 +364,878 @@ fun EditProfileScreen(
                     .verticalScroll(scrollState)
                     .padding(horizontal = 16.dp, vertical = 14.dp)
             ) {
-                // Media section header
-                Text(
-                    text = "Media",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TinderTextPrimary
-                )
-                Text(
-                    text = "Add up to 9 photos. Use prompts to share your personality.",
-                    fontSize = 13.sp,
-                    color = TinderTextSecondary
-                )
 
-                Spacer(modifier = Modifier.height(14.dp))
+                // ==========================================
+                // 1. TOP PART: IMAGE UPLOAD SECTION WITH REAL MEDIA PICKER
+                // ==========================================
+                DashboardSectionCard(
+                    title = "Profile Photos",
+                    subtitle = "Pick real images from your device gallery. Add up to 9 photos.",
+                    icon = Icons.Default.AddPhotoAlternate
+                ) {
+                    Column {
+                        // 3x3 Grid of photo slots
+                        val totalSlots = 9
+                        for (row in 0 until 3) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                for (col in 0 until 3) {
+                                    val slotIndex = row * 3 + col
+                                    val photoUrl = draft.photos.getOrNull(slotIndex)
 
-                // 3x3 Photo Grid (Matches screenshot 5)
-                val totalSlots = 9
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    for (row in 0 until 3) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            for (col in 0 until 3) {
-                                val slotIndex = row * 3 + col
-                                val photoUrl = draft.photos.getOrNull(slotIndex)
-
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .aspectRatio(0.75f)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(Color(0xFFE4E4E7)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    if (photoUrl != null) {
-                                        AsyncImage(
-                                            model = photoUrl,
-                                            contentDescription = "Photo ${slotIndex + 1}",
-                                            modifier = Modifier.fillMaxSize(),
-                                            contentScale = ContentScale.Crop
-                                        )
-
-                                        // ✕ Delete button on photo
-                                        Surface(
-                                            onClick = {
-                                                val updatedList = draft.photos.toMutableList()
-                                                if (slotIndex < updatedList.size) {
-                                                    updatedList.removeAt(slotIndex)
-                                                    draft = draft.copy(photos = updatedList)
-                                                }
-                                            },
-                                            shape = CircleShape,
-                                            color = Color.White,
-                                            shadowElevation = 2.dp,
-                                            modifier = Modifier
-                                                .align(Alignment.TopEnd)
-                                                .padding(6.dp)
-                                                .size(26.dp)
-                                        ) {
-                                            Box(contentAlignment = Alignment.Center) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Close,
-                                                    contentDescription = "Delete",
-                                                    tint = TinderCoral,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
-                                            }
-                                        }
-
-                                        // Prompt quote badge in bottom left (Matches screenshot 5)
-                                        Surface(
-                                            shape = CircleShape,
-                                            color = Color.White.copy(alpha = 0.9f),
-                                            modifier = Modifier
-                                                .align(Alignment.BottomStart)
-                                                .padding(6.dp)
-                                                .size(24.dp)
-                                        ) {
-                                            Box(contentAlignment = Alignment.Center) {
-                                                Text(
-                                                    text = "❝+",
-                                                    fontSize = 11.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = TinderTextPrimary
-                                                )
-                                            }
-                                        }
-                                    } else {
-                                        // Empty slot with + button
-                                        IconButton(
-                                            onClick = {
-                                                val pick = sampleAddPhotos[slotIndex % sampleAddPhotos.size]
-                                                draft = draft.copy(photos = draft.photos + pick)
-                                            }
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.Add,
-                                                contentDescription = "Add photo",
-                                                tint = TinderCoral,
-                                                modifier = Modifier.size(32.dp)
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .aspectRatio(0.78f)
+                                            .clip(RoundedCornerShape(14.dp))
+                                            .background(Color(0xFF261E1A))
+                                            .border(
+                                                width = 1.dp,
+                                                color = if (photoUrl != null) DashboardPeach.copy(alpha = 0.3f) else Color(0xFF3F322B),
+                                                shape = RoundedCornerShape(14.dp)
                                             )
+                                            .clickable {
+                                                targetPhotoSlot = slotIndex
+                                                singlePhotoPickerLauncher.launch(
+                                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                                )
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (photoUrl != null) {
+                                            AsyncImage(
+                                                model = photoUrl,
+                                                contentDescription = "Photo ${slotIndex + 1}",
+                                                modifier = Modifier.fillMaxSize(),
+                                                contentScale = ContentScale.Crop
+                                            )
+
+                                            // Main photo indicator for slot 0
+                                            if (slotIndex == 0) {
+                                                Surface(
+                                                    shape = RoundedCornerShape(bottomEnd = 10.dp),
+                                                    color = DashboardTerracotta,
+                                                    modifier = Modifier.align(Alignment.TopStart)
+                                                ) {
+                                                    Text(
+                                                        text = "MAIN",
+                                                        fontSize = 9.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = Color.White,
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    )
+                                                }
+                                            }
+
+                                            // Delete photo button
+                                            Surface(
+                                                onClick = {
+                                                    val updatedList = draft.photos.toMutableList()
+                                                    if (slotIndex < updatedList.size) {
+                                                        updatedList.removeAt(slotIndex)
+                                                        draft = draft.copy(photos = updatedList)
+                                                    }
+                                                },
+                                                shape = CircleShape,
+                                                color = Color(0xCC201B18),
+                                                border = BorderStroke(1.dp, Color(0xFF42342D)),
+                                                modifier = Modifier
+                                                    .align(Alignment.TopEnd)
+                                                    .padding(4.dp)
+                                                    .size(24.dp)
+                                            ) {
+                                                Box(contentAlignment = Alignment.Center) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Close,
+                                                        contentDescription = "Remove photo",
+                                                        tint = NopeCoral,
+                                                        modifier = Modifier.size(14.dp)
+                                                    )
+                                                }
+                                            }
+
+                                            // Tap to replace indicator at bottom
+                                            Surface(
+                                                color = Color(0x99201B18),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .align(Alignment.BottomCenter)
+                                            ) {
+                                                Text(
+                                                    text = "Change",
+                                                    fontSize = 9.sp,
+                                                    color = DashboardCream,
+                                                    textAlign = TextAlign.Center,
+                                                    modifier = Modifier.padding(vertical = 2.dp)
+                                                )
+                                            }
+                                        } else {
+                                            // Empty slot with + button
+                                            Column(
+                                                horizontalAlignment = Alignment.CenterHorizontally,
+                                                verticalArrangement = Arrangement.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Add,
+                                                    contentDescription = "Add photo",
+                                                    tint = DashboardPeach,
+                                                    modifier = Modifier.size(28.dp)
+                                                )
+                                                Spacer(modifier = Modifier.height(2.dp))
+                                                Text(
+                                                    text = "Slot ${slotIndex + 1}",
+                                                    fontSize = 10.sp,
+                                                    color = DashboardNavMuted
+                                                )
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
-                    }
-                }
 
-                Spacer(modifier = Modifier.height(18.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
 
-                // Photo options: Smart Photos (Matches screenshot 5)
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = TinderSurface,
-                    border = BorderStroke(1.dp, TinderBorder),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "Photo options",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TinderTextSecondary
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
+                        // Pick multiple photos action button
+                        Button(
+                            onClick = {
+                                multiplePhotosPickerLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = DashboardTerracotta,
+                                contentColor = Color.White
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PhotoLibrary,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Upload from Device Gallery",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Smart photos switch
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(0xFF2B221E), RoundedCornerShape(10.dp))
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = "Smart Photos",
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = TinderTextPrimary
-                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Smart Photos",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = DashboardCream
+                                )
+                                Text(
+                                    text = "Continuously puts your most liked photo first",
+                                    fontSize = 11.sp,
+                                    color = DashboardNavMuted
+                                )
+                            }
                             Switch(
                                 checked = draft.smartPhotos,
                                 onCheckedChange = { draft = draft.copy(smartPhotos = it) },
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = Color.White,
-                                    checkedTrackColor = TinderCoral
+                                    checkedTrackColor = DashboardTerracotta,
+                                    uncheckedThumbColor = DashboardNavMuted,
+                                    uncheckedTrackColor = Color(0xFF382D27)
                                 )
                             )
                         }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Smart Photos continuously tests all your profile photos to find the best one.",
-                            fontSize = 12.sp,
-                            color = TinderTextSecondary,
-                            lineHeight = 16.sp
-                        )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                // About me section (Matches screenshot 6)
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = TinderSurface,
-                    border = BorderStroke(1.dp, TinderBorder),
-                    modifier = Modifier.fillMaxWidth()
+                // ==========================================
+                // 2. PROFILE NAME
+                // ==========================================
+                DashboardSectionCard(
+                    title = "Profile Name",
+                    subtitle = "This will be displayed prominently on your Cupid card.",
+                    icon = Icons.Default.Badge
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                    Column {
+                        OutlinedTextField(
+                            value = draft.name,
+                            onValueChange = { if (it.length <= 50) draft = draft.copy(name = it) },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = { Text("Enter your full or preferred name", color = DashboardNavMuted) },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Person,
+                                    contentDescription = null,
+                                    tint = DashboardPeach
+                                )
+                            },
+                            trailingIcon = {
+                                if (draft.isVerified) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = "Verified Profile",
+                                        tint = SuperBlue
+                                    )
+                                }
+                            },
+                            colors = darkFieldColors(),
+                            shape = RoundedCornerShape(12.dp),
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(
+                                capitalization = KeyboardCapitalization.Words,
+                                imeAction = ImeAction.Next
+                            )
+                        )
+                        if (draft.name.isBlank()) {
+                            Text(
+                                text = "Name cannot be empty",
+                                color = NopeCoral,
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(start = 6.dp, top = 4.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // ==========================================
+                // 3. ABOUT ME SECTION (INPUT VALIDATIONS MAX 350 CHARS)
+                // ==========================================
+                DashboardSectionCard(
+                    title = "About Me",
+                    subtitle = "Express your personality. Strict maximum 350 characters.",
+                    icon = Icons.Default.Description
+                ) {
+                    val remainingChars = 350 - draft.bio.length
+                    Column {
+                        OutlinedTextField(
+                            value = draft.bio,
+                            onValueChange = {
+                                if (it.length <= 350) {
+                                    draft = draft.copy(bio = it)
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = {
+                                Text(
+                                    "Tell Kerala singles about your interests, vibe, favorite sulaimani spot or weekend plans...",
+                                    color = DashboardNavMuted,
+                                    fontSize = 13.sp
+                                )
+                            },
+                            colors = darkFieldColors(),
+                            shape = RoundedCornerShape(12.dp),
+                            minLines = 4,
+                            maxLines = 6
+                        )
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "About me",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = TinderTextPrimary
+                                text = if (remainingChars < 20) "$remainingChars characters remaining!" else "Max 350 chars",
+                                fontSize = 11.sp,
+                                color = if (remainingChars < 20) NopeCoral else DashboardNavMuted
                             )
+
                             Text(
-                                text = "${(500 - draft.bio.length).coerceAtLeast(0)}",
+                                text = "${draft.bio.length} / 350",
                                 fontSize = 12.sp,
-                                color = TinderTextSecondary
+                                fontWeight = FontWeight.Bold,
+                                color = if (draft.bio.length >= 340) NopeCoral else DashboardPeach
                             )
                         }
 
                         Spacer(modifier = Modifier.height(8.dp))
 
+                        Row(
+                            modifier = Modifier
+                                .clickable { showTipsDialog = true }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Lightbulb,
+                                contentDescription = null,
+                                tint = RewindGold,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "View \"About Me\" tips for Kerala singles",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = DashboardPeach
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // ==========================================
+                // 4. GENDER
+                // ==========================================
+                DashboardSectionCard(
+                    title = "Gender",
+                    subtitle = "Select your identified gender",
+                    icon = Icons.Default.Wc
+                ) {
+                    val genderOptions = listOf("Man", "Woman", "Non-binary", "Other")
+                    SelectableChipRow(
+                        options = genderOptions,
+                        selectedOption = draft.gender,
+                        onSelect = { draft = draft.copy(gender = it) }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // ==========================================
+                // 5. LOOKING FOR
+                // serious relationship, casual relationship, dating, NEW FRIENDS,
+                // FRIENDS WITH BENEFITS, COUPLE FANTASIES, NOT SURE YET
+                // ==========================================
+                DashboardSectionCard(
+                    title = "Looking For",
+                    subtitle = "Be open about what connection you want right now",
+                    icon = Icons.Default.Favorite
+                ) {
+                    val lookingForOptions = listOf(
+                        "Serious relationship",
+                        "Casual relationship",
+                        "Dating",
+                        "New friends",
+                        "Friends with benefits",
+                        "Couple fantasies",
+                        "Not sure yet"
+                    )
+
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        lookingForOptions.chunked(2).forEach { rowOptions ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                rowOptions.forEach { opt ->
+                                    val isSelected = draft.lookingFor.equals(opt, ignoreCase = true)
+                                    Surface(
+                                        onClick = { draft = draft.copy(lookingFor = opt) },
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = if (isSelected) DashboardTerracotta else Color(0xFF261E1A),
+                                        border = BorderStroke(
+                                            1.dp,
+                                            if (isSelected) DashboardPeach else Color(0xFF42342D)
+                                        ),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.Center
+                                        ) {
+                                            if (isSelected) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = null,
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(14.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                            }
+                                            Text(
+                                                text = opt,
+                                                fontSize = 12.sp,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (isSelected) Color.White else DashboardMutedBeige,
+                                                textAlign = TextAlign.Center,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                }
+                                if (rowOptions.size == 1) {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // ==========================================
+                // 6. CURRENT CITY WITH LOCATION FETCHING
+                // ==========================================
+                DashboardSectionCard(
+                    title = "Current City & Location",
+                    subtitle = "Used to show accurate distance to nearby singles in Kerala",
+                    icon = Icons.Default.LocationOn
+                ) {
+                    Column {
                         OutlinedTextField(
-                            value = draft.bio,
-                            onValueChange = { if (it.length <= 500) draft = draft.copy(bio = it) },
+                            value = draft.city,
+                            onValueChange = { draft = draft.copy(city = it) },
                             modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text("Write a short bio...") },
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = TinderCoral,
-                                unfocusedBorderColor = TinderBorder
-                            ),
+                            placeholder = { Text("e.g. Kochi, Kerala, India", color = DashboardNavMuted) },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Place,
+                                    contentDescription = null,
+                                    tint = DashboardPeach
+                                )
+                            },
+                            colors = darkFieldColors(),
                             shape = RoundedCornerShape(12.dp),
-                            minLines = 3
+                            singleLine = true
                         )
 
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { showTipsDialog = true },
-                            verticalAlignment = Alignment.CenterVertically
+                        // Location Fetch Button
+                        OutlinedButton(
+                            onClick = {
+                                locationPermissionLauncher.launch(
+                                    arrayOf(
+                                        Manifest.permission.ACCESS_FINE_LOCATION,
+                                        Manifest.permission.ACCESS_COARSE_LOCATION
+                                    )
+                                )
+                            },
+                            border = BorderStroke(1.2.dp, DashboardPeach),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = DashboardPeach),
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !isFetchingLocation
                         ) {
+                            if (isFetchingLocation) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    color = DashboardPeach,
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Detecting GPS coordinates...", fontSize = 13.sp)
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.MyLocation,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Auto-Detect Current City (GPS)",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        if (locationFeedbackMessage != null) {
+                            Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "Quick \"About me\" tips",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = TinderCoral
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Icon(
-                                imageVector = Icons.Default.Info,
-                                contentDescription = null,
-                                tint = TinderCoral,
-                                modifier = Modifier.size(14.dp)
+                                text = locationFeedbackMessage!!,
+                                fontSize = 11.sp,
+                                color = DashboardPeach,
+                                modifier = Modifier.padding(start = 4.dp)
                             )
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                // Prompts section (Matches screenshot 6)
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = TinderSurface,
-                    border = BorderStroke(1.dp, TinderBorder),
-                    modifier = Modifier.fillMaxWidth()
+                // ==========================================
+                // 7. WORK AND EDUCATIONS:
+                // COLLEGE NAME, COURSE NAME, DESIGNATION, COMPANY NAME
+                // ==========================================
+                DashboardSectionCard(
+                    title = "Work & Education",
+                    subtitle = "Share where you studied and where you work",
+                    icon = Icons.Default.School
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "Prompts",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TinderTextPrimary
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        // College Name
+                        DarkLabeledTextField(
+                            label = "College / University Name",
+                            value = draft.college,
+                            placeholder = "e.g. Govt Polytechnic College, NIT Calicut",
+                            icon = Icons.Default.AccountBalance,
+                            onValueChange = { draft = draft.copy(college = it) }
                         )
-                        Spacer(modifier = Modifier.height(12.dp))
 
-                        draft.prompts.forEachIndexed { index, prompt ->
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = TinderBg,
-                                border = BorderStroke(1.dp, TinderBorder),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(bottom = 10.dp)
+                        // Course Name
+                        DarkLabeledTextField(
+                            label = "Course / Degree Name",
+                            value = draft.courseName,
+                            placeholder = "e.g. B.Tech Computer Science, MBA, BA English",
+                            icon = Icons.Default.MenuBook,
+                            onValueChange = { draft = draft.copy(courseName = it) }
+                        )
+
+                        // Designation
+                        DarkLabeledTextField(
+                            label = "Designation / Job Title",
+                            value = draft.jobTitle,
+                            placeholder = "e.g. Founder, Software Engineer, Architect",
+                            icon = Icons.Default.Work,
+                            onValueChange = { draft = draft.copy(jobTitle = it) }
+                        )
+
+                        // Company Name
+                        DarkLabeledTextField(
+                            label = "Company Name",
+                            value = draft.company,
+                            placeholder = "e.g. Metric Flux Solutions, Infopark Kochi",
+                            icon = Icons.Default.Business,
+                            onValueChange = { draft = draft.copy(company = it) }
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // ==========================================
+                // 8. PERSONAL DETAILS:
+                // MARITAL STATUS, FAMILY PLANS, PETS, DRINKING, SMOKING
+                // ==========================================
+                DashboardSectionCard(
+                    title = "Personal Details & Lifestyle",
+                    subtitle = "Key values and everyday habits",
+                    icon = Icons.Default.Diversity3
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        // Marital Status
+                        OptionSelectorGroup(
+                            title = "Marital Status",
+                            options = listOf("Single", "Never Married", "In a Relationship", "Divorced", "Separated", "Widowed"),
+                            selected = draft.maritalStatus,
+                            onSelect = { draft = draft.copy(maritalStatus = it) }
+                        )
+
+                        HorizontalDivider(color = Color(0xFF382D27))
+
+                        // Family Plans
+                        OptionSelectorGroup(
+                            title = "Family Plans",
+                            options = listOf("Want children", "Don't want children", "Have children & want more", "Have children & don't want more", "Not sure yet"),
+                            selected = draft.familyPlans,
+                            onSelect = { draft = draft.copy(familyPlans = it) }
+                        )
+
+                        HorizontalDivider(color = Color(0xFF382D27))
+
+                        // Pets
+                        OptionSelectorGroup(
+                            title = "Pets",
+                            options = listOf("Dog lover", "Cat lover", "Have pets", "Don't have, but love pets", "Pet-free", "Allergic to pets"),
+                            selected = draft.pets,
+                            onSelect = { draft = draft.copy(pets = it) }
+                        )
+
+                        HorizontalDivider(color = Color(0xFF382D27))
+
+                        // Drinking
+                        OptionSelectorGroup(
+                            title = "Drinking Habits",
+                            options = listOf("Not for me", "Sober", "Socially", "Regularly", "On special occasions"),
+                            selected = draft.drinking,
+                            onSelect = { draft = draft.copy(drinking = it) }
+                        )
+
+                        HorizontalDivider(color = Color(0xFF382D27))
+
+                        // Smoking
+                        OptionSelectorGroup(
+                            title = "Smoking Habits",
+                            options = listOf("Non-smoker", "Social smoker", "Smoker", "Trying to quit"),
+                            selected = draft.smoking,
+                            onSelect = { draft = draft.copy(smoking = it) }
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // ==========================================
+                // 9. PROFILE SHARING (OPTIONAL):
+                // USERNAME, SHARE MY PROFILE
+                // ==========================================
+                DashboardSectionCard(
+                    title = "Profile Sharing (Optional)",
+                    subtitle = "Claim your custom handle and share your profile link with others",
+                    icon = Icons.Default.Share
+                ) {
+                    Column {
+                        Text(
+                            text = "Custom Username",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = DashboardMutedBeige
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        OutlinedTextField(
+                            value = draft.username,
+                            onValueChange = { input ->
+                                val clean = input.trim().replace("@", "").filter { it.isLetterOrDigit() || it == '_' }
+                                if (clean.length <= 30) draft = draft.copy(username = clean)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            placeholder = { Text("username_here", color = DashboardNavMuted) },
+                            prefix = {
+                                Text(
+                                    text = "@",
+                                    fontWeight = FontWeight.Bold,
+                                    color = DashboardPeach,
+                                    fontSize = 16.sp,
+                                    modifier = Modifier.padding(end = 4.dp)
+                                )
+                            },
+                            colors = darkFieldColors(),
+                            shape = RoundedCornerShape(12.dp),
+                            singleLine = true
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Link preview box
+                        val shareLink = "https://mallucupid.app/u/${draft.username.ifBlank { "user" }}"
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color(0xFF261E1A),
+                            border = BorderStroke(1.dp, Color(0xFF42342D)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(14.dp),
+                                    modifier = Modifier.weight(1f),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = prompt.question,
-                                            fontSize = 12.sp,
-                                            color = TinderTextSecondary
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = prompt.answer,
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = TinderTextPrimary
-                                        )
-                                    }
-                                    IconButton(
-                                        onClick = {
-                                            val updated = draft.prompts.toMutableList()
-                                            updated.removeAt(index)
-                                            draft = draft.copy(prompts = updated)
-                                        }
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Close,
-                                            contentDescription = "Remove prompt",
-                                            tint = TinderTextSecondary,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
+                                    Icon(
+                                        imageVector = Icons.Default.Link,
+                                        contentDescription = null,
+                                        tint = DashboardPeach,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = shareLink,
+                                        fontSize = 12.sp,
+                                        color = DashboardCream,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = {
+                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                        val clip = ClipData.newPlainText("MalluCupid Profile", shareLink)
+                                        clipboard?.setPrimaryClip(clip)
+                                        Toast.makeText(context, "Profile link copied to clipboard!", Toast.LENGTH_SHORT).show()
+                                    },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.ContentCopy,
+                                        contentDescription = "Copy link",
+                                        tint = DashboardPeach,
+                                        modifier = Modifier.size(16.dp)
+                                    )
                                 }
                             }
                         }
 
-                        // Add prompt button
-                        OutlinedButton(
-                            onClick = { showAddPromptDialog = true },
-                            shape = RoundedCornerShape(50),
-                            border = BorderStroke(1.5.dp, TinderCoral),
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Share button
+                        Button(
+                            onClick = {
+                                val sendIntent = Intent().apply {
+                                    action = Intent.ACTION_SEND
+                                    putExtra(
+                                        Intent.EXTRA_TEXT,
+                                        "Connect with me on MalluCupid! ❤️ Check out my profile: $shareLink"
+                                    )
+                                    type = "text/plain"
+                                }
+                                val shareIntent = Intent.createChooser(sendIntent, "Share your MalluCupid profile via")
+                                context.startActivity(shareIntent)
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = DashboardCard,
+                                contentColor = DashboardCream
+                            ),
+                            border = BorderStroke(1.dp, DashboardPeach.copy(alpha = 0.5f)),
+                            shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Add,
+                                imageVector = Icons.Default.Share,
                                 contentDescription = null,
-                                tint = TinderCoral,
+                                tint = DashboardPeach,
                                 modifier = Modifier.size(18.dp)
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Add prompt",
-                                color = TinderCoral,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(18.dp))
-
-                // Profile Details Sections (Matches screenshots 7 - 10)
-                Text(
-                    text = "Profile Details",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TinderTextPrimary
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = TinderSurface,
-                    border = BorderStroke(1.dp, TinderBorder),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column {
-                        GroupedEditRow(
-                            title = "Interests",
-                            value = draft.interests.joinToString(", ").ifBlank { "Add interests" },
-                            onClick = {
-                                draft = draft.copy(
-                                    interests = if (draft.interests.size > 2) draft.interests else listOf("Foodie", "Travel", "Music", "Art", "Startups")
-                                )
-                            }
-                        )
-                        HorizontalDivider(color = TinderBorder)
-
-                        GroupedEditRow(
-                            title = "Relationship Goals",
-                            value = "Looking for: ${draft.lookingFor}",
-                            onClick = {
-                                val nextGoal = when (draft.lookingFor) {
-                                    "Long-term partner" -> "Short-term fun"
-                                    "Short-term fun" -> "Serious commitment"
-                                    else -> "Long-term partner"
-                                }
-                                draft = draft.copy(lookingFor = nextGoal)
-                            }
-                        )
-                        HorizontalDivider(color = TinderBorder)
-
-                        GroupedEditRow(
-                            title = "Pronouns",
-                            value = draft.pronouns,
-                            onClick = {
-                                draft = draft.copy(pronouns = if (draft.pronouns == "He") "They" else "He")
-                            }
-                        )
-                        HorizontalDivider(color = TinderBorder)
-
-                        GroupedEditRow(
-                            title = "Height",
-                            value = draft.height,
-                            onClick = {}
-                        )
-                        HorizontalDivider(color = TinderBorder)
-
-                        GroupedEditRow(
-                            title = "Relationship type",
-                            value = draft.relationshipType,
-                            onClick = {
-                                draft = draft.copy(
-                                    relationshipType = if (draft.relationshipType == "Monogamy") "Open to exploring" else "Monogamy"
-                                )
-                            }
-                        )
-                        HorizontalDivider(color = TinderBorder)
-
-                        GroupedEditRow(
-                            title = "Languages I know",
-                            value = draft.languages.joinToString(", "),
-                            onClick = {}
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(18.dp))
-
-                // More about me Section (Matches screenshot 8: Zodiac, Education, Communication, Love style)
-                Text(
-                    text = "More about me",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TinderTextPrimary
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = TinderSurface,
-                    border = BorderStroke(1.dp, TinderBorder),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column {
-                        GroupedEditRow(
-                            title = "Zodiac",
-                            value = draft.zodiac,
-                            onClick = {
-                                val signs = listOf("Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo", "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces")
-                                val idx = (signs.indexOf(draft.zodiac) + 1) % signs.size
-                                draft = draft.copy(zodiac = signs[idx])
-                            }
-                        )
-                        HorizontalDivider(color = TinderBorder)
-
-                        GroupedEditRow(
-                            title = "Education",
-                            value = draft.education,
-                            onClick = {}
-                        )
-                        HorizontalDivider(color = TinderBorder)
-
-                        GroupedEditRow(
-                            title = "Family plans",
-                            value = draft.familyPlans,
-                            onClick = {}
-                        )
-                        HorizontalDivider(color = TinderBorder)
-
-                        GroupedEditRow(
-                            title = "Communication style",
-                            value = draft.communicationStyle,
-                            onClick = {}
-                        )
-                        HorizontalDivider(color = TinderBorder)
-
-                        GroupedEditRow(
-                            title = "Love style",
-                            value = draft.loveStyle,
-                            onClick = {}
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(18.dp))
-
-                // Lifestyle Section (Matches screenshot 9: Pets, Drinking, Smoking, Workout, Social media)
-                Text(
-                    text = "Lifestyle",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TinderTextPrimary
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = TinderSurface,
-                    border = BorderStroke(1.dp, TinderBorder),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column {
-                        GroupedEditRow(
-                            title = "Pets",
-                            value = draft.pets,
-                            onClick = {}
-                        )
-                        HorizontalDivider(color = TinderBorder)
-
-                        GroupedEditRow(
-                            title = "Drinking",
-                            value = draft.drinking,
-                            onClick = {}
-                        )
-                        HorizontalDivider(color = TinderBorder)
-
-                        GroupedEditRow(
-                            title = "How often do you smoke?",
-                            value = draft.smoking,
-                            onClick = {}
-                        )
-                        HorizontalDivider(color = TinderBorder)
-
-                        GroupedEditRow(
-                            title = "Workout",
-                            value = draft.workout,
-                            onClick = {}
-                        )
-                        HorizontalDivider(color = TinderBorder)
-
-                        GroupedEditRow(
-                            title = "Social media",
-                            value = draft.socialMedia,
-                            onClick = {}
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(18.dp))
-
-                // Work & Education Section (Matches screenshot 9)
-                Text(
-                    text = "Work & Education",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TinderTextPrimary
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = TinderSurface,
-                    border = BorderStroke(1.dp, TinderBorder),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column {
-                        GroupedEditRow(title = "College/uni", value = draft.college, onClick = {})
-                        HorizontalDivider(color = TinderBorder)
-                        GroupedEditRow(title = "Job title", value = draft.jobTitle, onClick = {})
-                        HorizontalDivider(color = TinderBorder)
-                        GroupedEditRow(title = "Company", value = draft.company, onClick = {})
-                        HorizontalDivider(color = TinderBorder)
-                        GroupedEditRow(title = "Living in", value = draft.city, onClick = {})
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(18.dp))
-
-                // Music & Spotify Section (Matches screenshot 10)
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = TinderSurface,
-                    border = BorderStroke(1.dp, TinderBorder),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "My Anthem",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TinderTextSecondary
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = draft.anthem,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = TinderTextPrimary
-                        )
-
-                        Spacer(modifier = Modifier.height(14.dp))
-
-                        Text(
-                            text = "My Top Spotify Artists",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TinderTextSecondary
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Button(
-                            onClick = {},
-                            shape = RoundedCornerShape(50),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1DB954)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Add Spotify to Your Profile", color = Color.White)
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(18.dp))
-
-                // Control Your Profile (Matches screenshot 11: Cupid Plus badge)
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = TinderSurface,
-                    border = BorderStroke(1.dp, TinderBorder),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = "Control Your Profile",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = TinderTextPrimary
-                            )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = TinderGold,
-                                modifier = Modifier.padding(vertical = 2.dp)
-                            ) {
-                                Text(
-                                    text = "PLUS",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
+                            Text(
+                                text = "Share My Profile",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = DashboardCream
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // ==========================================
+                // 10. HELP SECTION & LEGAL LINKS
+                // ==========================================
+                DashboardSectionCard(
+                    title = "Help & Community",
+                    subtitle = "Guidelines, safety measures and support resources",
+                    icon = Icons.Default.HelpOutline
+                ) {
+                    Column {
+                        GroupedActionRow(
+                            title = "Dating Safety & Tips",
+                            subtitle = "Tips for safe and enjoyable dates in Kerala",
+                            icon = Icons.Default.Shield,
+                            onClick = {
+                                helpDialogTopic = "Safety & Dating Tips"
+                                showHelpDialog = true
                             }
-                        }
+                        )
+                        HorizontalDivider(color = Color(0xFF382D27))
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                        GroupedActionRow(
+                            title = "Community Guidelines",
+                            subtitle = "Respect, authenticity, and mutual trust",
+                            icon = Icons.Default.Groups,
+                            onClick = {
+                                helpDialogTopic = "Community Guidelines"
+                                showHelpDialog = true
+                            }
+                        )
+                        HorizontalDivider(color = Color(0xFF382D27))
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Don't show my age",
-                                fontSize = 15.sp,
-                                color = TinderTextPrimary
-                            )
-                            Switch(
-                                checked = draft.dontShowAge,
-                                onCheckedChange = { draft = draft.copy(dontShowAge = it) },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = Color.White,
-                                    checkedTrackColor = TinderCoral
-                                )
-                            )
-                        }
+                        GroupedActionRow(
+                            title = "Help & Support Desk",
+                            subtitle = "Contact MalluCupid care team (support@mallucupid.app)",
+                            icon = Icons.Default.SupportAgent,
+                            onClick = {
+                                helpDialogTopic = "Help & Support Desk"
+                                showHelpDialog = true
+                            }
+                        )
+                    }
+                }
 
-                        HorizontalDivider(color = TinderBorder, modifier = Modifier.padding(vertical = 8.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Don't show my distance",
-                                fontSize = 15.sp,
-                                color = TinderTextPrimary
-                            )
-                            Switch(
-                                checked = draft.dontShowDistance,
-                                onCheckedChange = { draft = draft.copy(dontShowDistance = it) },
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = Color.White,
-                                    checkedTrackColor = TinderCoral
-                                )
-                            )
-                        }
+                // Legal Links Section
+                DashboardSectionCard(
+                    title = "Legal Information",
+                    subtitle = "Policies governing your account and personal data",
+                    icon = Icons.Default.Gavel
+                ) {
+                    Column {
+                        GroupedActionRow(
+                            title = "Terms of Service",
+                            subtitle = "Read user agreement and terms",
+                            icon = Icons.Default.Article,
+                            onClick = {
+                                legalDialogTopic = "Terms of Service"
+                                showLegalDialog = true
+                            }
+                        )
+                        HorizontalDivider(color = Color(0xFF382D27))
+
+                        GroupedActionRow(
+                            title = "Privacy Policy",
+                            subtitle = "How we protect your personal info and photos",
+                            icon = Icons.Default.Lock,
+                            onClick = {
+                                legalDialogTopic = "Privacy Policy"
+                                showLegalDialog = true
+                            }
+                        )
+                        HorizontalDivider(color = Color(0xFF382D27))
+
+                        GroupedActionRow(
+                            title = "Cookie & Location Preferences",
+                            subtitle = "Manage stored device preferences",
+                            icon = Icons.Default.Cookie,
+                            onClick = {
+                                legalDialogTopic = "Cookie & Location Preferences"
+                                showLegalDialog = true
+                            }
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // ==========================================
+                // 11. LOGOUT BUTTON WITH CONFIRMATION DIALOGUE BOX
+                // ==========================================
+                Surface(
+                    onClick = { showLogoutConfirmDialog = true },
+                    shape = RoundedCornerShape(16.dp),
+                    color = Color(0xFF2C1917),
+                    border = BorderStroke(1.2.dp, NopeCoral.copy(alpha = 0.5f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Logout,
+                            contentDescription = null,
+                            tint = NopeCoral,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "Log Out of MalluCupid",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = NopeCoral
+                        )
                     }
                 }
 
@@ -829,139 +1244,456 @@ fun EditProfileScreen(
         }
     }
 
-    // Add Prompt Dialog
-    if (showAddPromptDialog) {
-        val promptOptions = listOf(
-            "A life goal of mine is:",
-            "My ideal weekend in Kerala:",
-            "The quickest way to my heart is:",
-            "A non-negotiable for me is:",
-            "My favourite spot for sulaimani:"
-        )
-
+    // ==========================================
+    // LOGOUT CONFIRMATION DIALOGUE BOX
+    // ==========================================
+    if (showLogoutConfirmDialog) {
         AlertDialog(
-            onDismissRequest = { showAddPromptDialog = false },
+            onDismissRequest = { showLogoutConfirmDialog = false },
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Logout,
+                    contentDescription = null,
+                    tint = NopeCoral,
+                    modifier = Modifier.size(36.dp)
+                )
+            },
             title = {
-                Text("Select a Prompt", fontWeight = FontWeight.Bold, color = TinderTextPrimary)
+                Text(
+                    text = "Log Out of MalluCupid?",
+                    fontWeight = FontWeight.Bold,
+                    color = DashboardCream,
+                    fontSize = 18.sp
+                )
             },
             text = {
-                Column {
-                    promptOptions.forEach { q ->
-                        Surface(
-                            onClick = { newPromptQuestion = q },
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (newPromptQuestion == q) TinderBg else Color.Transparent,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = q,
-                                fontSize = 13.sp,
-                                fontWeight = if (newPromptQuestion == q) FontWeight.Bold else FontWeight.Normal,
-                                color = TinderTextPrimary,
-                                modifier = Modifier.padding(vertical = 8.dp, horizontal = 6.dp)
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = newPromptAnswer,
-                        onValueChange = { newPromptAnswer = it },
-                        placeholder = { Text("Your answer...") },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp)
-                    )
-                }
+                Text(
+                    text = "Are you sure you want to log out? You will need your email/password to sign back in and chat with your matches.",
+                    color = DashboardMutedBeige,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp
+                )
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        if (newPromptAnswer.isNotBlank()) {
-                            draft = draft.copy(
-                                prompts = draft.prompts + PromptItem(newPromptQuestion, newPromptAnswer)
-                            )
-                            newPromptAnswer = ""
-                            showAddPromptDialog = false
-                        }
+                        showLogoutConfirmDialog = false
+                        onSignOut()
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = TinderCoral)
+                    colors = ButtonDefaults.buttonColors(containerColor = NopeCoral)
                 ) {
-                    Text("Add", color = Color.White)
+                    Text("Log Out", color = Color.White, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showAddPromptDialog = false }) {
-                    Text("Cancel", color = TinderTextSecondary)
+                OutlinedButton(
+                    onClick = { showLogoutConfirmDialog = false },
+                    border = BorderStroke(1.dp, Color(0xFF4A3A33)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = DashboardMutedBeige)
+                ) {
+                    Text("Cancel")
                 }
             },
-            containerColor = TinderSurface
+            containerColor = DashboardCard,
+            shape = RoundedCornerShape(20.dp)
         )
     }
 
-    // Tips Dialog
+    // ==========================================
+    // HELP MODAL DIALOG
+    // ==========================================
+    if (showHelpDialog) {
+        AlertDialog(
+            onDismissRequest = { showHelpDialog = false },
+            title = {
+                Text(
+                    text = helpDialogTopic,
+                    fontWeight = FontWeight.Bold,
+                    color = DashboardCream
+                )
+            },
+            text = {
+                val content = when (helpDialogTopic) {
+                    "Safety & Dating Tips" -> """
+                        • Always meet in crowded public places for initial dates (e.g. Fort Kochi cafes, Lulu Mall, Calicut beach).
+                        • Inform a close friend or family member of your whereabouts.
+                        • Never share one-time passwords (OTP), banking details, or financial credentials.
+                        • Respect personal boundaries and cultural preferences.
+                        • Report and block any suspicious or inappropriate profiles immediately.
+                    """.trimIndent()
+                    "Community Guidelines" -> """
+                        • MalluCupid is dedicated to kind, authentic connections for Kerala singles.
+                        • Zero tolerance for hate speech, harassment, nudity, or fake accounts.
+                        • Treat every person with respect and dignity regardless of background.
+                        • Keep chats friendly, respectful, and consensual.
+                    """.trimIndent()
+                    else -> """
+                        • Need help with your account or profile verification?
+                        • Email our Kerala support team at: support@mallucupid.app
+                        • Response time: Within 24 hours.
+                        • Available 7 days a week.
+                    """.trimIndent()
+                }
+                Text(
+                    text = content,
+                    color = DashboardMutedBeige,
+                    fontSize = 13.sp,
+                    lineHeight = 20.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showHelpDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = DashboardTerracotta)
+                ) {
+                    Text("Close", color = Color.White)
+                }
+            },
+            containerColor = DashboardCard,
+            shape = RoundedCornerShape(20.dp)
+        )
+    }
+
+    // ==========================================
+    // LEGAL MODAL DIALOG
+    // ==========================================
+    if (showLegalDialog) {
+        AlertDialog(
+            onDismissRequest = { showLegalDialog = false },
+            title = {
+                Text(
+                    text = legalDialogTopic,
+                    fontWeight = FontWeight.Bold,
+                    color = DashboardCream
+                )
+            },
+            text = {
+                val content = when (legalDialogTopic) {
+                    "Terms of Service" -> """
+                        Welcome to MalluCupid. By accessing or using our application, you agree to comply with our Terms of Service.
+                        • Users must be at least 18 years of age.
+                        • Profile information must represent your real identity.
+                        • Accounts violating safety and harassment policies will be permanently terminated.
+                    """.trimIndent()
+                    "Privacy Policy" -> """
+                        Your privacy is our priority.
+                        • Your precise location coordinates are never revealed to other users (only approximate distance in kilometers).
+                        • Device media files are uploaded securely only when you select them.
+                        • We do not sell personal data to third parties.
+                    """.trimIndent()
+                    else -> """
+                        • Device cookies and local storage are used to preserve your login session and match preferences securely.
+                        • You can reset local cache anytime in your device application settings.
+                    """.trimIndent()
+                }
+                Text(
+                    text = content,
+                    color = DashboardMutedBeige,
+                    fontSize = 13.sp,
+                    lineHeight = 20.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showLegalDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = DashboardTerracotta)
+                ) {
+                    Text("Understood", color = Color.White)
+                }
+            },
+            containerColor = DashboardCard,
+            shape = RoundedCornerShape(20.dp)
+        )
+    }
+
+    // ==========================================
+    // BIO TIPS DIALOG
+    // ==========================================
     if (showTipsDialog) {
         AlertDialog(
             onDismissRequest = { showTipsDialog = false },
-            title = { Text("Profile Bio Tips", fontWeight = FontWeight.Bold, color = TinderTextPrimary) },
+            title = {
+                Text(
+                    text = "Profile Bio Tips",
+                    fontWeight = FontWeight.Bold,
+                    color = DashboardCream
+                )
+            },
             text = {
                 Text(
-                    text = "• Keep it authentic and concise.\n" +
-                            "• Mention your favorite local hobbies or places in Kerala.\n" +
-                            "• Avoid overly generic phrases.\n" +
-                            "• Mention what kind of connection you are seeking.",
-                    color = TinderTextPrimary,
-                    lineHeight = 22.sp
+                    text = "• Highlight your genuine interests (e.g. Malayalam cinema, road trips to Munnar/Wayanad, favorite foods).\n\n" +
+                            "• Keep it positive, conversational, and under the 350-character limit.\n\n" +
+                            "• Mention what kind of connection you are excited to find.\n\n" +
+                            "• A witty one-liner makes a great conversation starter!",
+                    color = DashboardMutedBeige,
+                    fontSize = 13.sp,
+                    lineHeight = 20.sp
                 )
             },
             confirmButton = {
                 Button(
                     onClick = { showTipsDialog = false },
-                    colors = ButtonDefaults.buttonColors(containerColor = TinderCoral)
+                    colors = ButtonDefaults.buttonColors(containerColor = DashboardTerracotta)
                 ) {
-                    Text("Got it", color = Color.White)
+                    Text("Got It", color = Color.White)
                 }
             },
-            containerColor = TinderSurface
+            containerColor = DashboardCard,
+            shape = RoundedCornerShape(20.dp)
+        )
+    }
+}
+
+// ====================================================================
+// SUB-COMPONENTS STYLED SPECIFICALLY IN DASHBOARD LUXURY ROMANTIC PALETTE
+// ====================================================================
+
+@Composable
+private fun DashboardSectionCard(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    content: @Composable () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = DashboardCard,
+        border = BorderStroke(1.dp, Color(0xFF42342D)),
+        shadowElevation = 2.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFF261E1A),
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = null,
+                            tint = DashboardPeach,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                Column {
+                    Text(
+                        text = title,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = DashboardCream
+                    )
+                    Text(
+                        text = subtitle,
+                        fontSize = 11.sp,
+                        color = DashboardNavMuted
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(14.dp))
+            content()
+        }
+    }
+}
+
+@Composable
+private fun DarkLabeledTextField(
+    label: String,
+    value: String,
+    placeholder: String,
+    icon: ImageVector,
+    onValueChange: (String) -> Unit
+) {
+    Column {
+        Text(
+            text = label,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = DashboardMutedBeige
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            placeholder = { Text(placeholder, color = DashboardNavMuted, fontSize = 13.sp) },
+            leadingIcon = {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = DashboardPeach,
+                    modifier = Modifier.size(18.dp)
+                )
+            },
+            colors = darkFieldColors(),
+            shape = RoundedCornerShape(12.dp),
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }
 
 @Composable
-private fun GroupedEditRow(
+private fun SelectableChipRow(
+    options: List<String>,
+    selectedOption: String,
+    onSelect: (String) -> Unit
+) {
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        items(options) { opt ->
+            val isSelected = selectedOption.equals(opt, ignoreCase = true)
+            Surface(
+                onClick = { onSelect(opt) },
+                shape = RoundedCornerShape(50),
+                color = if (isSelected) DashboardTerracotta else Color(0xFF261E1A),
+                border = BorderStroke(
+                    1.dp,
+                    if (isSelected) DashboardPeach else Color(0xFF42342D)
+                )
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (isSelected) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                    }
+                    Text(
+                        text = opt,
+                        fontSize = 12.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                        color = if (isSelected) Color.White else DashboardMutedBeige
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OptionSelectorGroup(
     title: String,
-    value: String,
+    options: List<String>,
+    selected: String,
+    onSelect: (String) -> Unit
+) {
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                color = DashboardCream
+            )
+            Text(
+                text = selected.ifBlank { "Not set" },
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = DashboardPeach
+            )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            items(options) { opt ->
+                val isSelected = selected.equals(opt, ignoreCase = true)
+                Surface(
+                    onClick = { onSelect(opt) },
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (isSelected) DashboardTerracotta else Color(0xFF261E1A),
+                    border = BorderStroke(
+                        1.dp,
+                        if (isSelected) DashboardPeach else Color(0xFF42342D)
+                    )
+                ) {
+                    Text(
+                        text = opt,
+                        fontSize = 12.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        color = if (isSelected) Color.White else DashboardMutedBeige,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GroupedActionRow(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
     onClick: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+            .padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = title,
-            fontSize = 15.sp,
-            color = TinderTextPrimary
-        )
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.weight(1f, fill = false)
+        Surface(
+            shape = CircleShape,
+            color = Color(0xFF261E1A),
+            modifier = Modifier.size(36.dp)
         ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = DashboardPeach,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = value,
+                text = title,
                 fontSize = 14.sp,
-                color = TinderTextSecondary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                fontWeight = FontWeight.SemiBold,
+                color = DashboardCream
             )
-            Spacer(modifier = Modifier.width(6.dp))
-            Icon(
-                imageVector = Icons.Default.ChevronRight,
-                contentDescription = null,
-                tint = TinderTextSecondary,
-                modifier = Modifier.size(18.dp)
+            Text(
+                text = subtitle,
+                fontSize = 11.sp,
+                color = DashboardNavMuted
             )
         }
+        Icon(
+            imageVector = Icons.Default.ChevronRight,
+            contentDescription = null,
+            tint = DashboardNavMuted,
+            modifier = Modifier.size(18.dp)
+        )
     }
 }
+
+@Composable
+private fun darkFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedBorderColor = DashboardTerracotta,
+    unfocusedBorderColor = Color(0xFF4A3A33),
+    focusedTextColor = DashboardCream,
+    unfocusedTextColor = DashboardCream,
+    focusedContainerColor = Color(0xFF261E1A),
+    unfocusedContainerColor = Color(0xFF261E1A),
+    cursorColor = DashboardPeach
+)

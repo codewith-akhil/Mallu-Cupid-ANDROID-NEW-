@@ -54,6 +54,7 @@ fun DashboardScreen(
     val profiles = remember { mutableStateListOf(*SampleProfiles.list.toTypedArray()) }
     var currentDraft by remember { mutableStateOf(userDraft) }
     var showEditProfileScreen by remember { mutableStateOf(false) }
+    var showAccountSettingsScreen by remember { mutableStateOf(false) }
     var expandedProfile by remember { mutableStateOf<DatingProfile?>(null) }
     var firstImpressionProfile by remember { mutableStateOf<DatingProfile?>(null) }
     var activeCategoryFilter by remember { mutableStateOf<String?>(null) }
@@ -97,7 +98,32 @@ fun DashboardScreen(
                 showEditProfileScreen = false
                 actionToast = "Profile updated successfully"
             },
-            onBack = { showEditProfileScreen = false }
+            onBack = { showEditProfileScreen = false },
+            onSignOut = {
+                showEditProfileScreen = false
+                onSignOut()
+            }
+        )
+        return
+    }
+
+    if (showAccountSettingsScreen) {
+        AccountSettingsScreen(
+            initialDraft = currentDraft,
+            onSaveAndClose = { updatedDraft ->
+                currentDraft = updatedDraft
+                showAccountSettingsScreen = false
+                actionToast = "Settings updated successfully"
+            },
+            onBack = { showAccountSettingsScreen = false },
+            onSignOut = {
+                showAccountSettingsScreen = false
+                onSignOut()
+            },
+            onAccountDeleted = {
+                showAccountSettingsScreen = false
+                onSignOut()
+            }
         )
         return
     }
@@ -249,6 +275,7 @@ fun DashboardScreen(
                 ProfileViewContent(
                     userDraft = currentDraft,
                     onEditProfile = { showEditProfileScreen = true },
+                    onOpenSettings = { showAccountSettingsScreen = true },
                     onSignOut = onSignOut
                 )
             }

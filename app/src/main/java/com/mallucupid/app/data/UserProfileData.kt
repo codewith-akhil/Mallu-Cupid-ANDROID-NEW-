@@ -48,8 +48,11 @@ data class OnboardingDraft(
     val workout: String = "Sometimes",
     val socialMedia: String = "Passive scroller",
     val college: String = "Govt Polytechnic College",
+    val courseName: String = "B.Tech Computer Science",
     val jobTitle: String = "Founder",
     val company: String = "METRIC FLUX SOLUTIONS PVT LTD",
+    val maritalStatus: String = "Single",
+    val username: String = "akhil_p",
     val anthem: String = "Janice STFU · Drake",
     val dontShowAge: Boolean = false,
     val dontShowDistance: Boolean = false,
@@ -57,7 +60,33 @@ data class OnboardingDraft(
     val myBoostsCount: Int = 0,
     val ageMin: Int = 21,
     val ageMax: Int = 33,
-    val dealBreakers: List<String> = listOf("Smoking")
+    val dealBreakers: List<String> = listOf("Smoking"),
+    // Account & Discovery Settings
+    val registeredEmail: String = "akhiakmtr12@gmail.com",
+    val interestedIn: List<String> = listOf("Women"), // Women, Men, Transmen, Transwomen, Couples, Anyone
+    val maxDistanceKm: Int = 50,
+    val photoVerifiedOnlyChat: Boolean = true,
+    val isOnline: Boolean = true,
+    // Active Status Settings (Screenshot 1)
+    val showActiveStatus: Boolean = true,
+    val showRecentlyActiveStatus: Boolean = true,
+    // Email Settings (Screenshot 2)
+    val emailVerified: Boolean = true,
+    val emailSubMatches: Boolean = true,
+    val emailSubMessages: Boolean = true,
+    val emailSubPromos: Boolean = true,
+    // Push Notifications (Screenshot 3)
+    val pushMatches: Boolean = true,
+    val pushMessages: Boolean = true,
+    val pushMessageLikes: Boolean = true,
+    val pushSuperLikes: Boolean = true,
+    val pushPromos: Boolean = false,
+    val pushLikesFrequency: String = "Every 1 new like",
+    val blockedUsers: List<BlockedUser> = listOf(
+        BlockedUser("blk_1", "Deepak Nair", "Kochi", "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=400&q=80"),
+        BlockedUser("blk_2", "Sneha Menon", "Thrissur", "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80"),
+        BlockedUser("blk_3", "Rahul Rajan", "Trivandrum", "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80")
+    )
 ) {
     val calculatedAge: Int
         get() {
@@ -65,6 +94,13 @@ data class OnboardingDraft(
             return (2026 - y).coerceIn(18, 99)
         }
 }
+
+data class BlockedUser(
+    val id: String,
+    val name: String,
+    val location: String,
+    val photoUrl: String
+)
 
 data class DatingProfile(
     val id: String,
