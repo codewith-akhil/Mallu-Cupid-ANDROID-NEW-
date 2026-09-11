@@ -31,6 +31,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -574,7 +575,7 @@ fun ChatViewContent(
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
                                                 Icon(
-                                                    imageVector = Icons.Default.Reply,
+                                                    imageVector = Icons.AutoMirrored.Filled.Reply,
                                                     contentDescription = "Reply",
                                                     tint = DashboardPeach,
                                                     modifier = Modifier.size(16.dp)
@@ -930,7 +931,7 @@ fun ChatViewContent(
                                 listState.firstVisibleItemScrollOffset > 50
                     }
                 }
-                AnimatedVisibility(
+                androidx.compose.animation.AnimatedVisibility(
                     visible = showFab,
                     enter = fadeIn(),
                     exit = fadeOut(),
