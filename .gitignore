@@ -19,3 +19,4 @@ app/build/
 local.properties
 .env
 debug.keystore
+app/google-services.json
