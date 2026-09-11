@@ -1,7 +1,7 @@
 # Mallu Cupid — Production Architecture & End-to-End Documentation
 
 <p align="center">
-  <b>The Premier Dating Application for Kerala Singles</b><br>
+  <b>The Premier Dating Application for Modern Singles</b><br>
   Built with 100% Kotlin, Jetpack Compose, Material 3, and Enterprise-Grade Android Privacy Controls
 </p>
 
@@ -9,10 +9,10 @@
 
 ## 1. Executive Summary & Brand Identity
 
-**Mallu Cupid** is a bespoke, culturally tailored dating and matchmaking application designed for Malayalis worldwide. The platform pairs modern dating mechanics (card-swiping discovery, real-time messaging, photo verification) with Kerala-specific lifestyle cultural touchpoints (native Malayalam interests, Kerala district home towns, filterable relationship intentions, and date night ideas in Kochi, Trivandrum, Kozhikode, and Thrissur).
+**Mallu Cupid** is a bespoke, thoughtfully tailored dating and matchmaking application designed for singles worldwide. The platform pairs modern dating mechanics (card-swiping discovery, real-time messaging, photo verification) with lifestyle-based cultural touchpoints (shared interests, home-town tags, filterable relationship intentions, and curated date night ideas across major cities).
 
 ### 🎨 Design System & Custom Color Palette
-Mallu Cupid implements a signature **Dark Luxury Kerala Palette** crafted with warm chocolate, earthy terracotta, and soft cream tones to deliver an inviting, premium aesthetic:
+Mallu Cupid implements a signature **Dark Luxury Palette** crafted with warm chocolate, earthy terracotta, and soft cream tones to deliver an inviting, premium aesthetic:
 
 | Color Token | Hex Code | Purpose |
 |---|---|---|
@@ -34,13 +34,13 @@ Mallu Cupid implements a signature **Dark Luxury Kerala Palette** crafted with w
 - **Swipe Cards**: Fluid gesture swiping (drag to Like / Nope) with spring animations.
 - **Action Toolbar**: Rewind last swipe, Nope (red circle), Super Like (blue star), Like (terracotta heart), and Boost.
 - **First Impression Modal**: Quick-response opening prompts allowing users to reply directly to a match's prompt before matching.
-- **Category Filter Chips**: Instant filtering by Kerala regions (*"Kochi Creatives"*, *"Techies in Infopark"*, *"Foodies & Cafe Lovers"*, *"Tradition & Roots"*).
+- **Category Filter Chips**: Instant filtering by interest-based communities (*"Downtown Creatives"*, *"Techies"*, *"Foodies & Cafe Lovers"*, *"Tradition & Roots"*).
 
 ### 2.2. Comprehensive Profile Editor (`EditProfileScreen`)
 - **6-Slot Photo Manager**: Drag, reorder, delete, and add profile photos with thumbnail badges.
-- **Malayalam & English Bios**: Rich text bio editor with live character counter.
+- **Rich Bios**: Rich text bio editor with live character counter.
 - **Relationship Intentions**: Filterable relationship types (Long-term partner, Casual dating, Matrimony-ready, Cafe buddies).
-- **Kerala Cultural Interests**: Lifestyle tags, music anthems, Kerala cuisine preferences, and zodiac signs.
+- **Lifestyle Interests**: Lifestyle tags, music anthems, cuisine preferences, and zodiac signs.
 - **Privacy Controls**: Toggles to hide age or distance if desired.
 
 ### 2.3. Account Settings Hub (`AccountSettingsScreen`)
@@ -89,11 +89,11 @@ Faithfully implemented from Android reference specifications:
 
 ### 2.7. Blocked Contacts & Unblock Workflow (`BlockedUsersScreen`)
 - **Live Search Field**: Real-time filtering by blocked contact's name or city.
-- **Blocked Contact Cards**: Displays user avatar, name, and Kerala city.
+- **Blocked Contact Cards**: Displays user avatar, name, and city.
 - **Two-Step Unblock Confirmation Dialog**: Prevents accidental unblocking by clearly warning that unblocked profiles will be able to see you and match again.
 
 ### 2.8. Account Deletion Workflow (`DeleteAccountScreen`)
-- **Structured Exit Survey**: Selectable reasons for leaving (*"Found someone special on Mallu Cupid"*, *"Taking a break from dating apps"*, *"Not getting quality matches in Kerala"*, *"Privacy and security concerns"*, *"Starting over with a new profile"*, or *"Other"*).
+- **Structured Exit Survey**: Selectable reasons for leaving (*"Found someone special on Mallu Cupid"*, *"Taking a break from dating apps"*, *"Not getting quality matches nearby"*, *"Privacy and security concerns"*, *"Starting over with a new profile"*, or *"Other"*).
 - **Optional Feedback Box**: Multi-line text field for user feedback.
 - **Double Confirmation Dialog**: Permanent deletion warning before account reset and sign-out.
 
@@ -111,8 +111,8 @@ Faithfully implemented from Android reference specifications:
 - **Rich Message Cards**:
   - Photos render with rounded cards and tap-to-view fullscreen modal.
   - Videos render with video thumbnail, overlay play button, and duration indicator (`0:18`, `0:24`).
-  - Quick-share presets allow instant testing of high-resolution Munnar scenery photos and Alleppey backwater video clips directly on emulators.
-- **Kerala Sticker & GIF Tray**: Fast picker for culturally relevant conversation starters (*"Vanakkam! 🙏"*, *"Chaya koodan undo? ☕"*, *"Fort Kochi vibes 🌴"*, *"Kidu look! ✨"*).
+  - Quick-share presets allow instant testing of high-resolution scenery photos and waterfront video clips directly on emulators.
+- **Sticker & GIF Tray**: Fast picker for conversation starters (*"Hey there! 🙏"*, *"Coffee together? ☕"*, *"City vibes 🌴"*, *"Great look! ✨"*).
 - **Message Heart Reactions**: One-tap heart button beside received message bubbles.
 
 ### 3.3. Perfect Working In-Chat Screenshot Prevention (`FLAG_SECURE`)
@@ -157,7 +157,7 @@ Faithfully implemented following the Tinder Photo Verification standard:
 - **Multi-Phase Geometry & Anti-Spoofing Analysis**:
   - Phase 1: Scanning 3D facial geometry.
   - Phase 2: Validating liveness and anti-spoofing algorithms.
-  - Phase 3: Matching facial landmarks against the user's 6 uploaded Kerala dating photos.
+  - Phase 3: Matching facial landmarks against the user's 6 uploaded dating photos.
 - **Verified Blue Checkmark Awarded**:
   - Automatically activates `isVerified = true` in state upon successful match.
   - Adds the glowing blue verified checkmark icon to the user's avatar, discovery card, and conversation threads.
@@ -169,9 +169,9 @@ Faithfully implemented following the Tinder Photo Verification standard:
 A complete 4-stage monetization and transaction workflow:
 
 ### 5.1. Subscription Plan: ₹49 INR Per Week
-- **Special Kerala Launch Offer**: ₹49 per week with cancel-anytime flexibility.
+- **Special Launch Offer**: ₹49 per week with cancel-anytime flexibility.
 - **Core Value Propositions**:
-  - 💖 **Unlimited Likes**: Swipe without daily limits on singles across Kerala.
+  - 💖 **Unlimited Likes**: Swipe without daily limits on singles nearby.
   - 👀 **See Who Likes You**: Instantly unblur all inbound likes and match without waiting.
   - 💬 **Unlimited Chat**: Message matches and share media without limits.
   - ⏪ **Unlimited Rewinds**: Take back accidental left swipes anytime.
@@ -200,7 +200,7 @@ Dedicated, reusable screens ensuring resilient user experiences across all edge 
 
 - **Loading Screen (`LoadingStateScreen`)**:
   - Animated pulsing Mallu Cupid logo with smooth dual-ring circular indicator.
-  - Displays culturally relevant Kerala dating tips and suggestions (*"Kochi cafes and Munnar photos get 3x more dates"*).
+  - Displays relevant dating tips and suggestions (*"Cafe photos and travel shots get 3x more dates"*).
 - **No Internet Screen (`NoInternetScreen`)**:
   - Distinctive offline indicator with Wi-Fi disconnected illustration.
   - Interactive "Try Again" button with simulated connectivity check spinner and recovery toast.
@@ -257,4 +257,4 @@ gradle :app:verifyRoborazziDebug
 
 ---
 
-*Mallu Cupid — Crafted with love for Kerala singles.*
+*Mallu Cupid — Crafted with love for modern singles.*
