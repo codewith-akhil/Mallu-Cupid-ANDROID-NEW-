@@ -22,7 +22,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mallucupid.app.data.OnboardingDraft
+import com.mallucupid.app.data.remote.SessionManager
+import com.mallucupid.app.data.remote.SettingsUpsert
+import com.mallucupid.app.data.remote.SupabaseRepository
 import com.mallucupid.app.ui.theme.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Email Settings Screen
@@ -32,6 +38,11 @@ import com.mallucupid.app.ui.theme.*
  * - "Send verification email" button
  * - Email subscriptions card: New matches, New messages, Promotions
  * - "Unsubscribe from all" button
+ *
+ * Persistence: loads `email_sub_matches`, `email_sub_messages`, `email_sub_promos` from `user_settings`
+ * on first composition, and PATCHes the same columns on every toggle change. The
+ * "Send verification email" button is an action only — the `email_verified` column is
+ * flipped server-side when the user clicks the link in the email (see audit report).
  */
 @Composable
 fun EmailSettingsScreen(
@@ -40,9 +51,60 @@ fun EmailSettingsScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val sessionUserId = remember { SessionManager.current()?.userId }
+
     var subMatches by remember { mutableStateOf(draft.emailSubMatches) }
     var subMessages by remember { mutableStateOf(draft.emailSubMessages) }
     var subPromos by remember { mutableStateOf(draft.emailSubPromos) }
+
+    var settingsLoading by remember { mutableStateOf(true) }
+    var settingsSaving by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        val uid = sessionUserId
+        if (uid == null) {
+            settingsLoading = false
+            return@LaunchedEffect
+        }
+        val settings = withContext(Dispatchers.IO) { SupabaseRepository.loadUserSettings(uid) }
+        if (settings != null) {
+            settings.emailSubMatches?.let { subMatches = it }
+            settings.emailSubMessages?.let { subMessages = it }
+            settings.emailSubPromos?.let { subPromos = it }
+            onUpdateDraft(
+                draft.copy(
+                    emailSubMatches = settings.emailSubMatches ?: draft.emailSubMatches,
+                    emailSubMessages = settings.emailSubMessages ?: draft.emailSubMessages,
+                    emailSubPromos = settings.emailSubPromos ?: draft.emailSubPromos,
+                )
+            )
+        }
+        settingsLoading = false
+    }
+
+    fun saveSettings(
+        matches: Boolean? = null,
+        messages: Boolean? = null,
+        promos: Boolean? = null,
+    ) {
+        val uid = sessionUserId ?: return
+        coroutineScope.launch {
+            settingsSaving = true
+            withContext(Dispatchers.IO) {
+                SupabaseRepository.saveUserSettings(
+                    uid,
+                    SettingsUpsert(
+                        userId = uid,
+                        emailSubMatches = matches,
+                        emailSubMessages = messages,
+                        emailSubPromos = promos,
+                    )
+                )
+            }
+            settingsSaving = false
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -84,19 +146,28 @@ fun EmailSettingsScreen(
                     text = "Email",
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Bold,
-                    color = DashboardCream
+                    color = DashboardCream,
+                    modifier = Modifier.weight(1f)
                 )
+
+                if (settingsLoading || settingsSaving) {
+                    CircularProgressIndicator(
+                        color = DashboardPeach,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
             }
         },
         containerColor = DashboardBg
     ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 18.dp, vertical = 14.dp)
-        ) {
+        Box(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 18.dp, vertical = 14.dp)
+            ) {
             // Section 1: Email address
             Text(
                 text = "Email address",
@@ -220,7 +291,9 @@ fun EmailSettingsScreen(
                             onCheckedChange = {
                                 subMatches = it
                                 onUpdateDraft(draft.copy(emailSubMatches = it))
+                                saveSettings(matches = it)
                             },
+                            enabled = !settingsLoading && !settingsSaving,
                             colors = SwitchDefaults.colors(
                                 checkedThumbColor = Color.White,
                                 checkedTrackColor = DashboardTerracotta,
@@ -251,7 +324,9 @@ fun EmailSettingsScreen(
                             onCheckedChange = {
                                 subMessages = it
                                 onUpdateDraft(draft.copy(emailSubMessages = it))
+                                saveSettings(messages = it)
                             },
+                            enabled = !settingsLoading && !settingsSaving,
                             colors = SwitchDefaults.colors(
                                 checkedThumbColor = Color.White,
                                 checkedTrackColor = DashboardTerracotta,
@@ -285,7 +360,9 @@ fun EmailSettingsScreen(
                                 onCheckedChange = {
                                     subPromos = it
                                     onUpdateDraft(draft.copy(emailSubPromos = it))
+                                    saveSettings(promos = it)
                                 },
+                                enabled = !settingsLoading && !settingsSaving,
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = Color.White,
                                     checkedTrackColor = DashboardTerracotta,
@@ -320,8 +397,10 @@ fun EmailSettingsScreen(
                             emailSubPromos = false
                         )
                     )
+                    saveSettings(matches = false, messages = false, promos = false)
                     Toast.makeText(context, "Unsubscribed from all email notifications", Toast.LENGTH_SHORT).show()
                 },
+                enabled = !settingsLoading && !settingsSaving,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp),
@@ -337,6 +416,23 @@ fun EmailSettingsScreen(
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold
                 )
+            }
+            }
+
+            // ---- Initial-load overlay (child of the existing root, no inset change) ----
+            if (settingsLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(DashboardBg.copy(alpha = 0.6f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(
+                        color = DashboardTerracotta,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(36.dp)
+                    )
+                }
             }
         }
     }

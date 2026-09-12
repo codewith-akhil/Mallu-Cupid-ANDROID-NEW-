@@ -131,6 +131,13 @@ data class ProfileUpsert(
     @Json(name = "age_min") val ageMin: Int? = null,
     @Json(name = "age_max") val ageMax: Int? = null,
     @Json(name = "registered_email") val registeredEmail: String? = null,
+    @Json(name = "dont_show_age") val dontShowAge: Boolean? = null,
+    @Json(name = "dont_show_distance") val dontShowDistance: Boolean? = null,
+    @Json(name = "smart_photos") val smartPhotos: Boolean? = null,
+    @Json(name = "super_likes_count") val superLikesCount: Int? = null,
+    @Json(name = "my_boosts_count") val myBoostsCount: Int? = null,
+    @Json(name = "photo_verified_only_chat") val photoVerifiedOnlyChat: Boolean? = null,
+    @Json(name = "is_online") val isOnline: Boolean? = null,
 )
 
 @JsonClass(generateAdapter = true)
@@ -165,6 +172,57 @@ data class SettingsUpsert(
     @Json(name = "push_super_likes") val pushSuperLikes: Boolean? = null,
     @Json(name = "push_promos") val pushPromos: Boolean? = null,
     @Json(name = "push_likes_frequency") val pushLikesFrequency: String? = null,
+)
+
+/**
+ * Read-side mirror of the user_settings row. Every field is nullable so the
+ * adapter tolerates missing columns if the row was inserted by older code.
+ */
+@JsonClass(generateAdapter = true)
+data class SettingsDto(
+    @Json(name = "user_id") val userId: String? = null,
+    @Json(name = "show_active_status") val showActiveStatus: Boolean? = null,
+    @Json(name = "show_recently_active_status") val showRecentlyActiveStatus: Boolean? = null,
+    @Json(name = "email_verified") val emailVerified: Boolean? = null,
+    @Json(name = "email_sub_matches") val emailSubMatches: Boolean? = null,
+    @Json(name = "email_sub_messages") val emailSubMessages: Boolean? = null,
+    @Json(name = "email_sub_promos") val emailSubPromos: Boolean? = null,
+    @Json(name = "push_matches") val pushMatches: Boolean? = null,
+    @Json(name = "push_messages") val pushMessages: Boolean? = null,
+    @Json(name = "push_message_likes") val pushMessageLikes: Boolean? = null,
+    @Json(name = "push_super_likes") val pushSuperLikes: Boolean? = null,
+    @Json(name = "push_promos") val pushPromos: Boolean? = null,
+    @Json(name = "push_likes_frequency") val pushLikesFrequency: String? = null,
+)
+
+/**
+ * Read-side mirror of the settings-related columns of the profiles row.
+ * Used by AccountSettingsScreen to hydrate discovery / chat-privacy toggles.
+ */
+@JsonClass(generateAdapter = true)
+data class ProfileSettingsDto(
+    @Json(name = "is_online") val isOnline: Boolean? = null,
+    @Json(name = "photo_verified_only_chat") val photoVerifiedOnlyChat: Boolean? = null,
+    @Json(name = "max_distance_km") val maxDistanceKm: Int? = null,
+    @Json(name = "age_min") val ageMin: Int? = null,
+    @Json(name = "age_max") val ageMax: Int? = null,
+    @Json(name = "interested_in") val interestedIn: List<String>? = null,
+    @Json(name = "dont_show_age") val dontShowAge: Boolean? = null,
+    @Json(name = "dont_show_distance") val dontShowDistance: Boolean? = null,
+)
+
+/**
+ * Partial PATCH body for the profiles row. All fields nullable so Moshi omits
+ * nulls and PostgREST only updates the columns we actually want to change.
+ */
+@JsonClass(generateAdapter = true)
+data class ProfileSettingsPatch(
+    @Json(name = "is_online") val isOnline: Boolean? = null,
+    @Json(name = "photo_verified_only_chat") val photoVerifiedOnlyChat: Boolean? = null,
+    @Json(name = "max_distance_km") val maxDistanceKm: Int? = null,
+    @Json(name = "age_min") val ageMin: Int? = null,
+    @Json(name = "age_max") val ageMax: Int? = null,
+    @Json(name = "interested_in") val interestedIn: List<String>? = null,
 )
 
 // ---------- Messages ----------
@@ -204,4 +262,19 @@ data class MatchDto(
     @Json(name = "user1_id") val user1Id: String,
     @Json(name = "user2_id") val user2Id: String,
     @Json(name = "created_at") val createdAt: String? = null,
+)
+
+// ---------- Message reactions ----------
+//
+// Schema (supabase/migrations/0001_initial_schema.sql):
+//   message_reactions(id bigint pk, message_id bigint, user_id uuid, emoji text,
+//                     created_at timestamptz, unique(message_id, user_id))
+// The unique(message_id, user_id) constraint lets us upsert a user's reaction
+// on a given message via PostgREST's `Prefer: resolution=merge-duplicates` header.
+
+@JsonClass(generateAdapter = true)
+data class ReactionInsert(
+    @Json(name = "message_id") val messageId: Long,
+    @Json(name = "user_id") val userId: String,
+    val emoji: String,
 )

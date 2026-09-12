@@ -32,7 +32,13 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.mallucupid.app.data.BlockedUser
 import com.mallucupid.app.data.OnboardingDraft
+import com.mallucupid.app.data.remote.ProfileSettingsPatch
+import com.mallucupid.app.data.remote.SessionManager
+import com.mallucupid.app.data.remote.SupabaseRepository
 import com.mallucupid.app.ui.theme.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,11 +50,65 @@ fun AccountSettingsScreen(
     onAccountDeleted: () -> Unit
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     var draft by remember { mutableStateOf(initialDraft) }
 
     // Sub-screen navigation states
     var currentSubView by remember { mutableStateOf("MAIN") } // "MAIN", "BLOCKED_USERS", "DELETE_ACCOUNT", "ACTIVE_STATUS", "EMAIL_SETTINGS", "PUSH_NOTIFICATIONS", "FACE_VERIFICATION"
     var userToUnblock by remember { mutableStateOf<BlockedUser?>(null) }
+
+    // ---- Settings persistence state (MAIN view only) ----
+    val sessionUserId = remember { SessionManager.current()?.userId }
+    var settingsLoading by remember { mutableStateOf(true) }
+    var settingsSaving by remember { mutableStateOf(false) }
+
+    /**
+     * Hydrate discovery / chat-privacy toggles from `profiles` + `user_settings`
+     * on first composition of the MAIN view. Sub-screens (ActiveStatus,
+     * EmailSettings, PushNotifications) load their own slices lazily.
+     */
+    LaunchedEffect(Unit) {
+        val uid = sessionUserId
+        if (uid == null) {
+            settingsLoading = false
+            return@LaunchedEffect
+        }
+        val (profile, settings) = withContext(Dispatchers.IO) {
+            SupabaseRepository.loadProfileSettings(uid) to SupabaseRepository.loadUserSettings(uid)
+        }
+        if (profile != null || settings != null) {
+            draft = draft.copy(
+                isOnline = profile?.isOnline ?: draft.isOnline,
+                photoVerifiedOnlyChat = profile?.photoVerifiedOnlyChat ?: draft.photoVerifiedOnlyChat,
+                maxDistanceKm = profile?.maxDistanceKm ?: draft.maxDistanceKm,
+                ageMin = profile?.ageMin ?: draft.ageMin,
+                ageMax = profile?.ageMax ?: draft.ageMax,
+                interestedIn = profile?.interestedIn?.takeIf { it.isNotEmpty() } ?: draft.interestedIn,
+                showActiveStatus = settings?.showActiveStatus ?: draft.showActiveStatus,
+                showRecentlyActiveStatus = settings?.showRecentlyActiveStatus ?: draft.showRecentlyActiveStatus,
+                emailSubMatches = settings?.emailSubMatches ?: draft.emailSubMatches,
+                emailSubMessages = settings?.emailSubMessages ?: draft.emailSubMessages,
+                emailSubPromos = settings?.emailSubPromos ?: draft.emailSubPromos,
+                pushMatches = settings?.pushMatches ?: draft.pushMatches,
+                pushMessages = settings?.pushMessages ?: draft.pushMessages,
+                pushMessageLikes = settings?.pushMessageLikes ?: draft.pushMessageLikes,
+                pushSuperLikes = settings?.pushSuperLikes ?: draft.pushSuperLikes,
+                pushPromos = settings?.pushPromos ?: draft.pushPromos,
+                pushLikesFrequency = settings?.pushLikesFrequency ?: draft.pushLikesFrequency,
+            )
+        }
+        settingsLoading = false
+    }
+
+    /** Persist a partial profile patch to the `profiles` table. */
+    fun saveProfilePatch(patch: ProfileSettingsPatch) {
+        val uid = sessionUserId ?: return
+        coroutineScope.launch {
+            settingsSaving = true
+            withContext(Dispatchers.IO) { SupabaseRepository.saveProfileSettings(patch, uid) }
+            settingsSaving = false
+        }
+    }
 
     when (currentSubView) {
         "FACE_VERIFICATION" -> {
@@ -198,8 +258,18 @@ fun AccountSettingsScreen(
                             modifier = Modifier.weight(1f)
                         )
 
+                        if (settingsLoading || settingsSaving) {
+                            CircularProgressIndicator(
+                                color = DashboardPeach,
+                                strokeWidth = 2.dp,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                        }
+
                         Button(
                             onClick = { onSaveAndClose(draft) },
+                            enabled = !settingsLoading,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = DashboardTerracotta,
                                 contentColor = Color.White
@@ -213,13 +283,13 @@ fun AccountSettingsScreen(
                 },
                 containerColor = DashboardBg
             ) { paddingValues ->
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(paddingValues)
-                        .verticalScroll(scrollState)
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                ) {
+                Box(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(scrollState)
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                    ) {
 
                     // ==========================================
                     // 1. DISCOVERY MANAGEMENT
@@ -255,6 +325,10 @@ fun AccountSettingsScreen(
                                 Slider(
                                     value = draft.maxDistanceKm.toFloat(),
                                     onValueChange = { draft = draft.copy(maxDistanceKm = it.toInt()) },
+                                    onValueChangeFinished = {
+                                        saveProfilePatch(ProfileSettingsPatch(maxDistanceKm = draft.maxDistanceKm))
+                                    },
+                                    enabled = !settingsLoading && !settingsSaving,
                                     valueRange = 2f..160f,
                                     steps = 78,
                                     colors = SliderDefaults.colors(
@@ -316,6 +390,7 @@ fun AccountSettingsScreen(
                                                             base
                                                         }
                                                         draft = draft.copy(interestedIn = updatedList)
+                                                        saveProfilePatch(ProfileSettingsPatch(interestedIn = updatedList))
                                                     },
                                                     shape = RoundedCornerShape(10.dp),
                                                     color = if (isSelected) DashboardTerracotta else Color(0xFF261E1A),
@@ -385,6 +460,15 @@ fun AccountSettingsScreen(
                                             ageMax = range.endInclusive.toInt()
                                         )
                                     },
+                                    onValueChangeFinished = {
+                                        saveProfilePatch(
+                                            ProfileSettingsPatch(
+                                                ageMin = draft.ageMin,
+                                                ageMax = draft.ageMax
+                                            )
+                                        )
+                                    },
+                                    enabled = !settingsLoading && !settingsSaving,
                                     valueRange = 18f..65f,
                                     steps = 46,
                                     colors = SliderDefaults.colors(
@@ -418,8 +502,10 @@ fun AccountSettingsScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(10.dp))
-                                    .clickable {
-                                        draft = draft.copy(photoVerifiedOnlyChat = !draft.photoVerifiedOnlyChat)
+                                    .clickable(enabled = !settingsLoading && !settingsSaving) {
+                                        val next = !draft.photoVerifiedOnlyChat
+                                        draft = draft.copy(photoVerifiedOnlyChat = next)
+                                        saveProfilePatch(ProfileSettingsPatch(photoVerifiedOnlyChat = next))
                                     }
                                     .padding(vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically
@@ -428,7 +514,9 @@ fun AccountSettingsScreen(
                                     checked = draft.photoVerifiedOnlyChat,
                                     onCheckedChange = { isChecked ->
                                         draft = draft.copy(photoVerifiedOnlyChat = isChecked)
+                                        saveProfilePatch(ProfileSettingsPatch(photoVerifiedOnlyChat = isChecked))
                                     },
+                                    enabled = !settingsLoading && !settingsSaving,
                                     colors = CheckboxDefaults.colors(
                                         checkedColor = DashboardTerracotta,
                                         checkmarkColor = Color.White,
@@ -509,7 +597,9 @@ fun AccountSettingsScreen(
                                     checked = draft.isOnline,
                                     onCheckedChange = { isChecked ->
                                         draft = draft.copy(isOnline = isChecked)
+                                        saveProfilePatch(ProfileSettingsPatch(isOnline = isChecked))
                                     },
+                                    enabled = !settingsLoading && !settingsSaving,
                                     colors = SwitchDefaults.colors(
                                         checkedThumbColor = Color.White,
                                         checkedTrackColor = Color(0xFF4CAF50),
@@ -867,6 +957,22 @@ fun AccountSettingsScreen(
                     }
 
                     Spacer(modifier = Modifier.height(30.dp))
+                    }
+                    // ---- Initial-load overlay (child of the existing root, no inset change) ----
+                    if (settingsLoading) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(DashboardBg.copy(alpha = 0.6f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(
+                                color = DashboardTerracotta,
+                                strokeWidth = 2.dp,
+                                modifier = Modifier.size(36.dp)
+                            )
+                        }
+                    }
                 }
             }
         }

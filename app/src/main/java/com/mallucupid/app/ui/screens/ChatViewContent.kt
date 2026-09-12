@@ -52,6 +52,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import coil.compose.AsyncImage
 import com.mallucupid.app.data.DatingProfile
+import com.mallucupid.app.data.remote.MessageDto
+import com.mallucupid.app.data.remote.SessionManager
+import com.mallucupid.app.data.remote.SupabaseRepository
 import com.mallucupid.app.ui.theme.*
 
 private fun Context.findActivity(): Activity? {
@@ -87,7 +90,15 @@ data class ChatMessageItem(
     val replyToText: String? = null,
     val replyToSenderName: String? = null,
     // Feature #25 — Voice message duration label (e.g. "0:08"). Only used when type == VOICE.
-    val audioDuration: String? = null
+    val audioDuration: String? = null,
+    // Chat-Wiring — Real Supabase message id (Long). Populated when a message is
+    // loaded from / confirmed by the server. Null for hardcoded sample messages
+    // and for optimistic messages that have not yet been confirmed by the API.
+    val serverId: Long? = null,
+    // Chat-Wiring — True while the optimistic send is being confirmed by Supabase.
+    // Renders a small spinner next to the bubble; flips to false on success or the
+    // message is removed on failure.
+    val isSending: Boolean = false
 )
 
 data class ChatThreadItem(
@@ -108,6 +119,137 @@ data class ConversationListItem(
     val dayLabel: String,
     val message: ChatMessageItem?
 )
+
+// =============================================================================
+// Chat-Wiring — Supabase <-> ChatMessageItem mapping helpers
+// =============================================================================
+
+/**
+ * Formats an ISO-8601 timestamp returned by Supabase (e.g. "2025-09-12T15:04:11.123Z")
+ * into the human-readable shape consumed by [dayLabelFromTimestamp]:
+ *   "Friday 12 Sep, 15:04"
+ *
+ * Falls back to "Just now" on any parse failure so the conversation list still
+ * renders — never throws.
+ */
+private fun formatSupabaseTimestamp(iso: String?): String {
+    if (iso.isNullOrBlank()) return "Just now"
+    return try {
+        // Try with milliseconds first ("yyyy-MM-dd'T'HH:mm:ss.SSS"), then without.
+        val withMs = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS", java.util.Locale.US)
+        val noMs = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
+        // Strip trailing "Z" / timezone offset — SimpleDateFormat in this pattern
+        // does not parse the "Z" suffix, and we don't need TZ-correct display.
+        val raw = iso.substringBefore('Z').substringBefore('+')
+        val date = runCatching { withMs.parse(raw) }.getOrNull()
+            ?: runCatching { noMs.parse(raw) }.getOrNull()
+            ?: return "Just now"
+        val outDay = java.text.SimpleDateFormat("EEEE", java.util.Locale.US).format(date)
+        val outDate = java.text.SimpleDateFormat("dd MMM", java.util.Locale.US).format(date)
+        val outTime = java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(date)
+        "$outDay $outDate, $outTime"
+    } catch (_: Throwable) {
+        "Just now"
+    }
+}
+
+/**
+ * Maps a Supabase [MessageDto] into the local [ChatMessageItem] representation.
+ * - `isSender` is determined by comparing the sender_id against the current user.
+ * - `serverId` is populated so reactions / read-receipts can be persisted later.
+ * - `isRead` defaults to `true` for received messages (we only display the
+ *   ✓ / ✓✓ marks on the sender side), and the server's value is honored for
+ *   the sender's own outgoing messages.
+ */
+private fun MessageDto.toChatMessageItem(currentUserId: String): ChatMessageItem {
+    val isSender = senderId == currentUserId
+    return ChatMessageItem(
+        id = "server_${id ?: System.currentTimeMillis()}",
+        text = content,
+        isSender = isSender,
+        timestamp = formatSupabaseTimestamp(createdAt),
+        type = when (type) {
+            "image" -> ChatMessageType.IMAGE
+            "video" -> ChatMessageType.VIDEO
+            "voice" -> ChatMessageType.VOICE
+            else -> ChatMessageType.TEXT
+        },
+        mediaUrl = mediaUrl,
+        // MessageDto currently has no videoDuration field — left null on real messages.
+        videoDuration = null,
+        // Received messages don't show ✓✓ (only the sender side does), so we
+        // treat them as "read" for rendering purposes.
+        isRead = if (isSender) isRead else true,
+        audioDuration = audioDuration,
+        serverId = id
+    )
+}
+
+/**
+ * Maps a [ChatMessageType] to the lowercase string the Supabase `messages.type`
+ * column expects (see schema CHECK constraint: text|image|video|voice|system).
+ */
+private fun ChatMessageType.toSupabaseType(): String = when (this) {
+    ChatMessageType.TEXT -> "text"
+    ChatMessageType.IMAGE -> "image"
+    ChatMessageType.VIDEO -> "video"
+    ChatMessageType.VOICE -> "voice"
+}
+
+/**
+ * Chat tray shimmer row — pulsing placeholder used while the matches list is
+ * being fetched from Supabase. Reuses DashboardCard / DashboardNavMuted tokens
+ * so no new colours are introduced.
+ */
+@Composable
+private fun ChatThreadShimmerRow() {
+    val transition = rememberInfiniteTransition(label = "shimmer_pulse")
+    val alpha by transition.animateFloat(
+        initialValue = 0.25f,
+        targetValue = 0.6f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "shimmer_alpha"
+    )
+    Surface(
+        color = DashboardCard,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(54.dp)
+                    .clip(CircleShape)
+                    .background(DashboardNavMuted.copy(alpha = alpha))
+            )
+            Spacer(modifier = Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.5f)
+                        .height(14.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(DashboardNavMuted.copy(alpha = alpha))
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.85f)
+                        .height(12.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(DashboardNavMuted.copy(alpha = alpha))
+                )
+            }
+        }
+    }
+}
 
 /**
  * ChatViewContent
@@ -222,26 +364,151 @@ fun ChatViewContent(
         )
     }
 
+    // Chat-Wiring — Snapshot of the hardcoded sample messages used as a dev
+    // fallback when Supabase returns no real messages for a match (or the call
+    // fails). We snapshot once so re-opening the same conversation always
+    // restores the same canned thread instead of an empty list.
+    val sampleMessagesFallback = remember {
+        conversationMessages.toList()
+    }
+
+    // Chat-Wiring — Conversation-level loading state. True while we are resolving
+    // the matchId and fetching real messages from Supabase. Renders a centered
+    // 24.dp DashboardTerracotta spinner in place of the LazyColumn.
+    var conversationLoading by remember { mutableStateOf(false) }
+    // Chat-Wiring — The Supabase match uuid resolved for the currently open
+    // partner. Null when no match exists (dev fallback) — outgoing sends are
+    // then local-only so the chat still works in dev.
+    var activeMatchId by remember { mutableStateOf<String?>(null) }
+    // Chat-Wiring — True while the chat tray is fetching the user's matches
+    // list from Supabase. Renders shimmer placeholder rows in the Messages list.
+    var chatTrayLoading by remember { mutableStateOf(true) }
+
+    // Chat-Wiring — Fetch the user's matches list once when the chat tray is
+    // first shown. We don't render real match rows yet (would require per-match
+    // partner-profile fetches, out of scope for this task), but the call
+    // validates API reachability and gives the shimmer a real network window.
+    // The existing sample thread list remains the rendered fallback.
+    LaunchedEffect(Unit) {
+        val uid = SessionManager.current()?.userId
+        if (uid != null) {
+            runCatching { SupabaseRepository.getMatches(uid) }
+        }
+        chatTrayLoading = false
+    }
+
+    // Chat-Wiring — Whenever the open partner changes, resolve the matchId for
+    // (current_user, partner) and load the real message history. Falls back to
+    // the canned sample messages on any failure or empty result so the chat
+    // still works in dev (per task spec).
+    LaunchedEffect(activeChatProfile?.id) {
+        val partner = activeChatProfile ?: return@LaunchedEffect
+        conversationLoading = true
+        val uid = SessionManager.current()?.userId
+        if (uid == null) {
+            // No session — keep the existing sample messages and just dismiss
+            // the spinner so the conversation is usable offline.
+            activeMatchId = null
+            conversationMessages.clear()
+            conversationMessages.addAll(sampleMessagesFallback)
+            conversationLoading = false
+            return@LaunchedEffect
+        }
+        val matchId = runCatching {
+            SupabaseRepository.getMatchId(uid, partner.id)
+        }.getOrNull()
+        activeMatchId = matchId
+        if (matchId == null) {
+            // No match row — fall back to the canned sample conversation.
+            conversationMessages.clear()
+            conversationMessages.addAll(sampleMessagesFallback)
+            conversationLoading = false
+            return@LaunchedEffect
+        }
+        val msgs = runCatching {
+            SupabaseRepository.getMessages(matchId)
+        }.getOrDefault(emptyList())
+        if (msgs.isEmpty()) {
+            // Empty history — fall back to the canned sample conversation so
+            // the screen is not blank in dev / pre-seed environments.
+            conversationMessages.clear()
+            conversationMessages.addAll(sampleMessagesFallback)
+            conversationLoading = false
+            return@LaunchedEffect
+        }
+        // Replace local list with real Supabase messages.
+        conversationMessages.clear()
+        msgs.forEach { dto ->
+            conversationMessages.add(dto.toChatMessageItem(uid))
+        }
+        conversationLoading = false
+    }
+
     // Android Photo & Video Picker launcher
     val mediaPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
             val isVideo = context.contentResolver.getType(uri)?.startsWith("video") == true
+            val msgType = if (isVideo) ChatMessageType.VIDEO else ChatMessageType.IMAGE
+            val tempId = "msg_${System.currentTimeMillis()}"
+            // Optimistic insert — isSending=true so a small spinner shows next to
+            // the bubble while Supabase confirms the insert.
             conversationMessages.add(
                 ChatMessageItem(
-                    id = "msg_${System.currentTimeMillis()}",
+                    id = tempId,
                     text = if (isVideo) "Shared a video clip 🎥" else "Shared a photo 📷",
                     isSender = true,
                     timestamp = "Just now",
-                    type = if (isVideo) ChatMessageType.VIDEO else ChatMessageType.IMAGE,
+                    type = msgType,
                     mediaUrl = uri.toString(),
                     videoDuration = if (isVideo) "0:15" else null,
                     // Feature #20 — new sender messages start unread until partner "reads" them.
-                    isRead = false
+                    isRead = false,
+                    isSending = true
                 )
             )
             Toast.makeText(context, if (isVideo) "Video sent securely" else "Photo sent securely", Toast.LENGTH_SHORT).show()
+
+            // Chat-Wiring — Persist to Supabase. Local content:// Uri is stored
+            // as-is for now; a storage-upload pipeline (Supabase Storage) would
+            // replace this with a public URL in a follow-up.
+            val matchId = activeMatchId
+            val uid = SessionManager.current()?.userId
+            val partnerProfile = activeChatProfile
+            if (matchId != null && uid != null && partnerProfile != null) {
+                chatScope.launch {
+                    val sent = runCatching {
+                        SupabaseRepository.sendMessage(
+                            matchId = matchId,
+                            senderId = uid,
+                            receiverId = partnerProfile.id,
+                            content = if (isVideo) "Shared a video clip 🎥" else "Shared a photo 📷",
+                            type = msgType.toSupabaseType(),
+                            mediaUrl = uri.toString(),
+                            audioDuration = if (isVideo) "0:15" else null,
+                            replyToId = null
+                        )
+                    }.getOrNull()
+                    val idx = conversationMessages.indexOfFirst { it.id == tempId }
+                    if (idx < 0) return@launch
+                    if (sent != null) {
+                        conversationMessages[idx] = conversationMessages[idx].copy(
+                            isSending = false,
+                            serverId = sent.id
+                        )
+                    } else {
+                        conversationMessages.removeAt(idx)
+                        Toast.makeText(context, "Message failed to send", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } else {
+                // Dev fallback — no matchId, mark as sent locally so the spinner clears.
+                val idx = conversationMessages.indexOfFirst { it.id == tempId }
+                if (idx >= 0) {
+                    conversationMessages[idx] = conversationMessages[idx].copy(isSending = false)
+                }
+            }
         }
     }
 
@@ -457,6 +724,22 @@ fun ChatViewContent(
                     .weight(1f)
                     .fillMaxWidth()
             ) {
+                // Chat-Wiring — Centered spinner shown while we resolve the
+                // matchId and fetch the real message history from Supabase.
+                // Sits INSIDE the existing message-list Box so it never extends
+                // into the top status-bar or bottom nav-bar regions.
+                if (conversationLoading) {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            color = DashboardTerracotta,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                } else {
                 LazyColumn(
                     state = listState,
                     modifier = Modifier
@@ -553,8 +836,43 @@ fun ChatViewContent(
                                                         .clickable {
                                                             val idx = conversationMessages.indexOfFirst { it.id == msg.id }
                                                             if (idx >= 0) {
+                                                                val current = conversationMessages[idx]
+                                                                // Toggle behaviour — tapping the same emoji that is
+                                                                // already set clears it (and deletes the row in
+                                                                // Supabase); a different emoji upserts the row.
+                                                                val clearing = current.reaction == emoji
                                                                 conversationMessages[idx] =
-                                                                    conversationMessages[idx].copy(reaction = emoji)
+                                                                    current.copy(reaction = if (clearing) null else emoji)
+
+                                                                // Chat-Wiring — Persist the reaction to Supabase.
+                                                                // Only real (server-backed) messages can have a
+                                                                // persisted reaction; local sample / pending
+                                                                // optimistic messages stay local-only.
+                                                                val serverMsgId = current.serverId
+                                                                val uid = SessionManager.current()?.userId
+                                                                if (serverMsgId != null && uid != null) {
+                                                                    chatScope.launch {
+                                                                        val ok = runCatching {
+                                                                            if (clearing) {
+                                                                                SupabaseRepository.removeReaction(serverMsgId, uid)
+                                                                            } else {
+                                                                                SupabaseRepository.addReaction(serverMsgId, uid, emoji)
+                                                                            }
+                                                                        }.getOrDefault(false)
+                                                                        if (!ok) {
+                                                                            // Roll back the local change so the UI matches
+                                                                            // the server state. If the row was missing, find
+                                                                            // it by serverId (the optimistic id may have been
+                                                                            // promoted to "server_<id>" on send confirmation).
+                                                                            val idx2 = conversationMessages.indexOfFirst { it.serverId == serverMsgId }
+                                                                            if (idx2 >= 0) {
+                                                                                conversationMessages[idx2] =
+                                                                                    conversationMessages[idx2].copy(reaction = current.reaction)
+                                                                            }
+                                                                            Toast.makeText(context, "Couldn't save reaction", Toast.LENGTH_SHORT).show()
+                                                                        }
+                                                                    }
+                                                                }
                                                             }
                                                             showReactionPickerFor = null
                                                         }
@@ -857,6 +1175,15 @@ fun ChatViewContent(
                                                 modifier = Modifier.size(16.dp)
                                             )
                                         }
+                                    } else if (msg.isSending) {
+                                        // Chat-Wiring — Small sending spinner next to the sender's
+                                        // optimistic bubble while Supabase confirms the insert.
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        CircularProgressIndicator(
+                                            color = DashboardNavMuted,
+                                            strokeWidth = 1.5.dp,
+                                            modifier = Modifier.size(12.dp)
+                                        )
                                     }
                                 }
 
@@ -923,6 +1250,7 @@ fun ChatViewContent(
                         }
                     }
                 }
+                } // end of `else { not loading }` — wraps the LazyColumn above.
 
                 // Feature #22 — Scroll-to-bottom FAB. Visible only when not at the bottom of the list.
                 val showFab by remember {
@@ -1123,20 +1451,62 @@ fun ChatViewContent(
                             Surface(
                                 onClick = {
                                     val secs = voiceRecordSeconds.coerceAtLeast(1)
+                                    val audioDuration = "0:${secs.toString().padStart(2, '0')}"
+                                    val tempId = "msg_${System.currentTimeMillis()}"
                                     conversationMessages.add(
                                         ChatMessageItem(
-                                            id = "msg_${System.currentTimeMillis()}",
+                                            id = tempId,
                                             text = "",
                                             isSender = true,
                                             timestamp = "Just now",
                                             type = ChatMessageType.VOICE,
-                                            audioDuration = "0:${secs.toString().padStart(2, '0')}",
-                                            isRead = false
+                                            audioDuration = audioDuration,
+                                            isRead = false,
+                                            isSending = true
                                         )
                                     )
                                     // TODO: integrate MediaRecorder for real recording
                                     isRecordingVoice = false
                                     voiceRecordSeconds = 0
+
+                                    // Chat-Wiring — Persist the voice message row to Supabase.
+                                    // The audio bytes themselves are not uploaded yet (no storage
+                                    // pipeline); only the metadata row is inserted so the message
+                                    // appears in the partner's history. The local waveform UI
+                                    // renders from `audioDuration`.
+                                    val matchId = activeMatchId
+                                    val uid = SessionManager.current()?.userId
+                                    if (matchId != null && uid != null) {
+                                        chatScope.launch {
+                                            val sent = runCatching {
+                                                SupabaseRepository.sendMessage(
+                                                    matchId = matchId,
+                                                    senderId = uid,
+                                                    receiverId = partner.id,
+                                                    content = "",
+                                                    type = "voice",
+                                                    audioDuration = audioDuration,
+                                                    replyToId = null
+                                                )
+                                            }.getOrNull()
+                                            val idx = conversationMessages.indexOfFirst { it.id == tempId }
+                                            if (idx < 0) return@launch
+                                            if (sent != null) {
+                                                conversationMessages[idx] = conversationMessages[idx].copy(
+                                                    isSending = false,
+                                                    serverId = sent.id
+                                                )
+                                            } else {
+                                                conversationMessages.removeAt(idx)
+                                                Toast.makeText(context, "Message failed to send", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    } else {
+                                        val idx = conversationMessages.indexOfFirst { it.id == tempId }
+                                        if (idx >= 0) {
+                                            conversationMessages[idx] = conversationMessages[idx].copy(isSending = false)
+                                        }
+                                    }
                                 },
                                 shape = CircleShape,
                                 color = DashboardTerracotta,
@@ -1259,13 +1629,16 @@ fun ChatViewContent(
                                     onClick = {
                                         if (chatMessageInput.isNotBlank()) {
                                             val replySnapshot = replyTarget
+                                            val tempId = "msg_${System.currentTimeMillis()}"
+                                            val textToSend = chatMessageInput.trim()
                                             conversationMessages.add(
                                                 ChatMessageItem(
-                                                    id = "msg_${System.currentTimeMillis()}",
-                                                    text = chatMessageInput.trim(),
+                                                    id = tempId,
+                                                    text = textToSend,
                                                     isSender = true,
                                                     timestamp = "Just now",
                                                     isRead = false,
+                                                    isSending = true,
                                                     replyToText = replySnapshot?.text,
                                                     replyToSenderName = if (replySnapshot != null) {
                                                         if (replySnapshot.isSender) "You" else partner.name
@@ -1275,7 +1648,46 @@ fun ChatViewContent(
                                             chatMessageInput = ""
                                             replyTarget = null
 
+                                            // Chat-Wiring — Persist the outgoing text to Supabase.
+                                            // Optimistic UI is already updated above; we just
+                                            // confirm with the API and patch serverId / isSending
+                                            // (or roll back + toast on failure).
+                                            val matchId = activeMatchId
+                                            val uid = SessionManager.current()?.userId
+                                            if (matchId != null && uid != null) {
+                                                chatScope.launch {
+                                                    val sent = runCatching {
+                                                        SupabaseRepository.sendMessage(
+                                                            matchId = matchId,
+                                                            senderId = uid,
+                                                            receiverId = partner.id,
+                                                            content = textToSend,
+                                                            type = "text",
+                                                            replyToId = replySnapshot?.serverId
+                                                        )
+                                                    }.getOrNull()
+                                                    val idx = conversationMessages.indexOfFirst { it.id == tempId }
+                                                    if (idx < 0) return@launch
+                                                    if (sent != null) {
+                                                        conversationMessages[idx] = conversationMessages[idx].copy(
+                                                            isSending = false,
+                                                            serverId = sent.id
+                                                        )
+                                                    } else {
+                                                        conversationMessages.removeAt(idx)
+                                                        Toast.makeText(context, "Message failed to send", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            } else {
+                                                // Dev fallback — no matchId, clear the spinner locally.
+                                                val idx = conversationMessages.indexOfFirst { it.id == tempId }
+                                                if (idx >= 0) {
+                                                    conversationMessages[idx] = conversationMessages[idx].copy(isSending = false)
+                                                }
+                                            }
+
                                             // Feature #19 — Simulate partner typing then canned reply.
+                                            // TODO: replace canned-reply simulation with realtime subscription when available.
                                             if (!partnerIsTyping) {
                                                 chatScope.launch {
                                                     partnerIsTyping = true
@@ -1568,6 +1980,12 @@ fun ChatViewContent(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
+                    // Chat-Wiring — Shimmer placeholders shown while the user's
+                    // matches list is being fetched from Supabase (brief loading
+                    // window on first entry to the Chat tray).
+                    if (chatTrayLoading) {
+                        items(5) { ChatThreadShimmerRow() }
+                    } else {
                     items(sampleThreads) { thread ->
                         Surface(
                             onClick = { activeChatProfile = thread.profile },
@@ -1663,6 +2081,7 @@ fun ChatViewContent(
                                 }
                             }
                         }
+                    }
                     }
                 }
             }
@@ -1878,17 +2297,56 @@ fun ChatViewContent(
                 Surface(
                     onClick = {
                         showMediaPickerSheet = false
+                        val photoText = "Here's a view from the hills! 🌿"
+                        val photoUrl = "https://images.unsplash.com/photo-1596895111956-bf1cf0599ce5?auto=format&fit=crop&w=800&q=80"
+                        val tempId = "msg_${System.currentTimeMillis()}"
                         conversationMessages.add(
                             ChatMessageItem(
-                                id = "msg_${System.currentTimeMillis()}",
-                                text = "Here's a view from the hills! 🌿",
+                                id = tempId,
+                                text = photoText,
                                 isSender = true,
                                 timestamp = "Just now",
                                 type = ChatMessageType.IMAGE,
-                                mediaUrl = "https://images.unsplash.com/photo-1596895111956-bf1cf0599ce5?auto=format&fit=crop&w=800&q=80"
+                                mediaUrl = photoUrl,
+                                isRead = false,
+                                isSending = true
                             )
                         )
                         Toast.makeText(context, "Photo shared", Toast.LENGTH_SHORT).show()
+                        // Chat-Wiring — Persist the quick-share photo to Supabase.
+                        val matchId = activeMatchId
+                        val uid = SessionManager.current()?.userId
+                        val partnerProfile = activeChatProfile
+                        if (matchId != null && uid != null && partnerProfile != null) {
+                            chatScope.launch {
+                                val sent = runCatching {
+                                    SupabaseRepository.sendMessage(
+                                        matchId = matchId,
+                                        senderId = uid,
+                                        receiverId = partnerProfile.id,
+                                        content = photoText,
+                                        type = "image",
+                                        mediaUrl = photoUrl
+                                    )
+                                }.getOrNull()
+                                val idx = conversationMessages.indexOfFirst { it.id == tempId }
+                                if (idx < 0) return@launch
+                                if (sent != null) {
+                                    conversationMessages[idx] = conversationMessages[idx].copy(
+                                        isSending = false,
+                                        serverId = sent.id
+                                    )
+                                } else {
+                                    conversationMessages.removeAt(idx)
+                                    Toast.makeText(context, "Message failed to send", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        } else {
+                            val idx = conversationMessages.indexOfFirst { it.id == tempId }
+                            if (idx >= 0) {
+                                conversationMessages[idx] = conversationMessages[idx].copy(isSending = false)
+                            }
+                        }
                     },
                     shape = RoundedCornerShape(12.dp),
                     color = Color(0xFF261E1A),
@@ -1936,18 +2394,57 @@ fun ChatViewContent(
                 Surface(
                     onClick = {
                         showMediaPickerSheet = false
+                        val videoText = "Check out this lake district houseboat clip! 🚤"
+                        val videoUrl = "https://images.unsplash.com/photo-1593693397690-362cb9666fc2?auto=format&fit=crop&w=800&q=80"
+                        val tempId = "msg_${System.currentTimeMillis()}"
                         conversationMessages.add(
                             ChatMessageItem(
-                                id = "msg_${System.currentTimeMillis()}",
-                                text = "Check out this lake district houseboat clip! 🚤",
+                                id = tempId,
+                                text = videoText,
                                 isSender = true,
                                 timestamp = "Just now",
                                 type = ChatMessageType.VIDEO,
-                                mediaUrl = "https://images.unsplash.com/photo-1593693397690-362cb9666fc2?auto=format&fit=crop&w=800&q=80",
-                                videoDuration = "0:24"
+                                mediaUrl = videoUrl,
+                                videoDuration = "0:24",
+                                isRead = false,
+                                isSending = true
                             )
                         )
                         Toast.makeText(context, "Video shared", Toast.LENGTH_SHORT).show()
+                        // Chat-Wiring — Persist the quick-share video to Supabase.
+                        val matchId = activeMatchId
+                        val uid = SessionManager.current()?.userId
+                        val partnerProfile = activeChatProfile
+                        if (matchId != null && uid != null && partnerProfile != null) {
+                            chatScope.launch {
+                                val sent = runCatching {
+                                    SupabaseRepository.sendMessage(
+                                        matchId = matchId,
+                                        senderId = uid,
+                                        receiverId = partnerProfile.id,
+                                        content = videoText,
+                                        type = "video",
+                                        mediaUrl = videoUrl
+                                    )
+                                }.getOrNull()
+                                val idx = conversationMessages.indexOfFirst { it.id == tempId }
+                                if (idx < 0) return@launch
+                                if (sent != null) {
+                                    conversationMessages[idx] = conversationMessages[idx].copy(
+                                        isSending = false,
+                                        serverId = sent.id
+                                    )
+                                } else {
+                                    conversationMessages.removeAt(idx)
+                                    Toast.makeText(context, "Message failed to send", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        } else {
+                            val idx = conversationMessages.indexOfFirst { it.id == tempId }
+                            if (idx >= 0) {
+                                conversationMessages[idx] = conversationMessages[idx].copy(isSending = false)
+                            }
+                        }
                     },
                     shape = RoundedCornerShape(12.dp),
                     color = Color(0xFF261E1A),
@@ -2035,14 +2532,51 @@ fun ChatViewContent(
                         Surface(
                             onClick = {
                                 showGifPickerSheet = false
+                                // Chat-Wiring — Optimistic GIF send (treated as a text
+                                // message so the partner sees the same string).
+                                val tempId = "msg_${System.currentTimeMillis()}"
                                 conversationMessages.add(
                                     ChatMessageItem(
-                                        id = "msg_${System.currentTimeMillis()}",
+                                        id = tempId,
                                         text = gifText,
                                         isSender = true,
-                                        timestamp = "Just now"
+                                        timestamp = "Just now",
+                                        isRead = false,
+                                        isSending = true
                                     )
                                 )
+                                val matchId = activeMatchId
+                                val uid = SessionManager.current()?.userId
+                                val partnerProfile = activeChatProfile
+                                if (matchId != null && uid != null && partnerProfile != null) {
+                                    chatScope.launch {
+                                        val sent = runCatching {
+                                            SupabaseRepository.sendMessage(
+                                                matchId = matchId,
+                                                senderId = uid,
+                                                receiverId = partnerProfile.id,
+                                                content = gifText,
+                                                type = "text"
+                                            )
+                                        }.getOrNull()
+                                        val idx = conversationMessages.indexOfFirst { it.id == tempId }
+                                        if (idx < 0) return@launch
+                                        if (sent != null) {
+                                            conversationMessages[idx] = conversationMessages[idx].copy(
+                                                isSending = false,
+                                                serverId = sent.id
+                                            )
+                                        } else {
+                                            conversationMessages.removeAt(idx)
+                                            Toast.makeText(context, "Message failed to send", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                } else {
+                                    val idx = conversationMessages.indexOfFirst { it.id == tempId }
+                                    if (idx >= 0) {
+                                        conversationMessages[idx] = conversationMessages[idx].copy(isSending = false)
+                                    }
+                                }
                             },
                             shape = RoundedCornerShape(10.dp),
                             color = Color(0xFF261E1A),
