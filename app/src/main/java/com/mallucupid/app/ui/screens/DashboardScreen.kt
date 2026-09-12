@@ -46,6 +46,8 @@ import coil.compose.AsyncImage
 import com.mallucupid.app.data.DatingProfile
 import com.mallucupid.app.data.OnboardingDraft
 import com.mallucupid.app.data.SampleProfiles
+import com.mallucupid.app.data.remote.SessionManager
+import com.mallucupid.app.data.remote.SupabaseRepository
 import com.mallucupid.app.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -56,6 +58,20 @@ fun DashboardScreen(
     onSignOut: () -> Unit
 ) {
     val profiles = remember { mutableStateListOf(*SampleProfiles.list.toTypedArray()) }
+    val coroutineScope = rememberCoroutineScope()
+    // Load the real swipe deck from Supabase on first composition, falling back
+    // to the bundled SampleProfiles if the deck is empty or the call fails
+    // (e.g. before edge functions are deployed or before other users exist).
+    LaunchedEffect(Unit) {
+        val session = SessionManager.current()
+        if (session?.userId != null) {
+            val deck = SupabaseRepository.getSwipeDeck(limit = 20)
+            if (deck.isNotEmpty()) {
+                profiles.clear()
+                profiles.addAll(deck)
+            }
+        }
+    }
     val haptic = LocalHapticFeedback.current
     val unreadChatCount = 2 // TODO: replace static demo count with real unread-chats state from ChatViewModel
     var currentDraft by remember { mutableStateOf(userDraft) }
@@ -269,12 +285,22 @@ fun DashboardScreen(
                         matchedProfile = likedProfile
                         showMatchModal = true
                         actionToast = "Liked ${likedProfile.name} ♥"
+                        // Persist the swipe to Supabase (the DB trigger auto-creates
+                        // a match row when the like is mutual).
+                        coroutineScope.launch {
+                            val uid = SessionManager.current()?.userId ?: return@launch
+                            SupabaseRepository.recordSwipe(uid, likedProfile.id, "like")
+                        }
                         if (displayProfiles.isNotEmpty()) {
                             currentProfileIndex = (currentProfileIndex + 1) % displayProfiles.size
                         }
                     },
                     onDislike = { dislikedProfile ->
                         actionToast = "Passed on ${dislikedProfile.name}"
+                        coroutineScope.launch {
+                            val uid = SessionManager.current()?.userId ?: return@launch
+                            SupabaseRepository.recordSwipe(uid, dislikedProfile.id, "pass")
+                        }
                         if (displayProfiles.isNotEmpty()) {
                             currentProfileIndex = (currentProfileIndex + 1) % displayProfiles.size
                         }

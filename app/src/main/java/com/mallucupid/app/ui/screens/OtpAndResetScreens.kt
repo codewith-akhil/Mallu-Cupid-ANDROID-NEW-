@@ -22,6 +22,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mallucupid.app.ui.theme.*
+import com.mallucupid.app.data.remote.SupabaseAuth
 import kotlinx.coroutines.delay
 
 @Composable
@@ -87,7 +88,7 @@ fun ResetPasswordScreen(
                     text = "Send OTP",
                     onClick = {
                         if (email.isNotBlank()) {
-                            loading = true
+                            onSendOtp(email)
                         }
                     },
                     height = if (isCompact) 50.dp else 56.dp
@@ -104,15 +105,6 @@ fun ResetPasswordScreen(
                     )
                 }
             }
-        }
-    }
-
-    // Simulate success after delay
-    LaunchedEffect(loading) {
-        if (loading) {
-            delay(1500)
-            loading = false
-            onSendOtp(email)
         }
     }
 }
@@ -283,9 +275,19 @@ fun OtpVerificationScreen(
 
     LaunchedEffect(loading) {
         if (loading) {
-            delay(1500)
+            // Call the real Supabase OTP verification flow.
+            val code = otp.joinToString("")
+            val (token, err) = SupabaseAuth.signInWithOtp(email, code)
             loading = false
-            onVerified()
+            if (token != null) {
+                Toast.makeText(context, "Signed in ✓", Toast.LENGTH_SHORT).show()
+                onVerified()
+            } else {
+                Toast.makeText(context, err ?: "Verification failed", Toast.LENGTH_SHORT).show()
+                // Clear the boxes so the user can try again.
+                otp = List(6) { "" }
+                focusRequesters.firstOrNull()?.requestFocus()
+            }
         }
     }
 }

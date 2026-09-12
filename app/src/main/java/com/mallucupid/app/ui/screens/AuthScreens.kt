@@ -30,7 +30,7 @@ import com.mallucupid.app.ui.theme.*
 
 @Composable
 fun SignInScreen(
-    onSignIn: () -> Unit,
+    onSignIn: (String) -> Unit,
     onGoToSignUp: () -> Unit,
     onForgotPassword: () -> Unit
 ) {
@@ -138,7 +138,7 @@ fun SignInScreen(
                         emailErrorText = if (emailError) "Enter a valid email address" else null
                         passwordError = password.length < 6
                         passwordErrorText = if (passwordError) "Minimum 6 characters" else null
-                        if (!emailError && !passwordError) onSignIn()
+                        if (!emailError && !passwordError) onSignIn(email)
                     },
                     height = if (isCompact) 50.dp else 56.dp
                 )
