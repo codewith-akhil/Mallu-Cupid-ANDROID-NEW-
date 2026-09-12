@@ -40,12 +40,9 @@ import kotlinx.coroutines.withContext
  * - New likes with frequency selector (Every 1, 10, 100 new likes)
  *
  * Persistence: loads `push_matches`, `push_messages`, `push_message_likes`,
- * `push_super_likes`, `push_promos`, `push_likes_frequency` from `user_settings`
- * on first composition, and PATCHes the same columns on every toggle change.
- *
- * NOTE (audit gap): the local-only `pushNewLikesEnabled` master toggle has no
- * corresponding DB column and is NOT persisted — flipping it only shows/hides
- * the frequency selector. See Settings-Wiring audit report for migration recommendation.
+ * `push_super_likes`, `push_promos`, `push_likes_enabled`, `push_likes_frequency`
+ * from `user_settings` on first composition, and PATCHes the same columns on
+ * every toggle change.
  */
 @Composable
 fun PushNotificationsScreen(
@@ -81,6 +78,7 @@ fun PushNotificationsScreen(
             settings.pushSuperLikes?.let { pushSuperLikes = it }
             settings.pushPromos?.let { pushPromos = it }
             settings.pushLikesFrequency?.let { selectedLikesFrequency = it }
+            pushNewLikesEnabled = settings.pushLikesEnabled ?: true
             onUpdateDraft(
                 draft.copy(
                     pushMatches = settings.pushMatches ?: draft.pushMatches,
@@ -101,6 +99,7 @@ fun PushNotificationsScreen(
         messageLikes: Boolean? = null,
         superLikes: Boolean? = null,
         promos: Boolean? = null,
+        likesEnabled: Boolean? = null,
         likesFrequency: String? = null,
     ) {
         val uid = sessionUserId ?: return
@@ -116,6 +115,7 @@ fun PushNotificationsScreen(
                         pushMessageLikes = messageLikes,
                         pushSuperLikes = superLikes,
                         pushPromos = promos,
+                        pushLikesEnabled = likesEnabled,
                         pushLikesFrequency = likesFrequency,
                     )
                 )
@@ -287,7 +287,10 @@ fun PushNotificationsScreen(
                         subtitle = "You have new likes. See who likes You.",
                         isChecked = pushNewLikesEnabled,
                         enabled = !settingsLoading && !settingsSaving,
-                        onCheckedChange = { pushNewLikesEnabled = it }
+                        onCheckedChange = {
+                            pushNewLikesEnabled = it
+                            saveSettings(likesEnabled = it)
+                        }
                     )
 
                     if (pushNewLikesEnabled) {

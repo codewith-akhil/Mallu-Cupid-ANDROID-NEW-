@@ -359,6 +359,7 @@ fun OnboardingScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                     TextButton(
                         onClick = { onComplete(draft) },
+                        enabled = !isSaving,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(

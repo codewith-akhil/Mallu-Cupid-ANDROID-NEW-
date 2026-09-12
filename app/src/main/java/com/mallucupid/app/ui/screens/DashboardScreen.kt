@@ -119,9 +119,17 @@ fun DashboardScreen(
         EditProfileScreen(
             initialDraft = currentDraft,
             onSaveAndClose = { updatedDraft ->
-                currentDraft = updatedDraft
-                showEditProfileScreen = false
-                actionToast = "Profile updated successfully"
+                coroutineScope.launch {
+                    val uid = SessionManager.current()?.userId
+                    if (uid != null) {
+                        val ok = SupabaseRepository.saveProfile(uid, updatedDraft.registeredEmail.ifBlank { SessionManager.current()?.email.orEmpty() }, updatedDraft)
+                        actionToast = if (ok) "Profile saved" else "Profile saved locally"
+                    } else {
+                        actionToast = "Profile saved locally"
+                    }
+                    currentDraft = updatedDraft
+                    showEditProfileScreen = false
+                }
             },
             onBack = { showEditProfileScreen = false },
             onSignOut = {
@@ -217,6 +225,12 @@ fun DashboardScreen(
             onDismiss = { firstImpressionProfile = null },
             onSendMessage = { targetProfile, message ->
                 firstImpressionProfile = null
+                // Note: persisting first impressions requires a dedicated
+                // `first_impressions` table in the backend (out of scope for
+                // this fix). SupabaseRepository.sendMessage() cannot be used
+                // because it requires a match_id, which does not exist for
+                // non-mutual first impressions. Do NOT add a half-working
+                // persistence call here.
                 actionToast = "First Impression sent to ${targetProfile.name}! 💌"
                 if (displayProfiles.isNotEmpty()) {
                     currentProfileIndex = (currentProfileIndex + 1) % displayProfiles.size
@@ -234,9 +248,17 @@ fun DashboardScreen(
             onLike = {
                 val p = activeExp
                 expandedProfile = null
-                matchedProfile = p
-                showMatchModal = true
                 actionToast = "Liked ${p.name} ♥"
+                coroutineScope.launch {
+                    val uid = SessionManager.current()?.userId ?: return@launch
+                    SupabaseRepository.recordSwipe(uid, p.id, "like")
+                    // Only show match modal if a mutual match actually exists.
+                    val matchId = SupabaseRepository.getMatchId(uid, p.id)
+                    if (matchId != null) {
+                        matchedProfile = p
+                        showMatchModal = true
+                    }
+                }
                 if (displayProfiles.isNotEmpty()) {
                     currentProfileIndex = (currentProfileIndex + 1) % displayProfiles.size
                 }
@@ -282,14 +304,16 @@ fun DashboardScreen(
                     onTabSelected = { activeTab = it },
                     onOpenFilter = { showFilterSheet = true },
                     onLike = { likedProfile ->
-                        matchedProfile = likedProfile
-                        showMatchModal = true
                         actionToast = "Liked ${likedProfile.name} ♥"
-                        // Persist the swipe to Supabase (the DB trigger auto-creates
-                        // a match row when the like is mutual).
                         coroutineScope.launch {
                             val uid = SessionManager.current()?.userId ?: return@launch
                             SupabaseRepository.recordSwipe(uid, likedProfile.id, "like")
+                            // Only show match modal if a mutual match actually exists.
+                            val matchId = SupabaseRepository.getMatchId(uid, likedProfile.id)
+                            if (matchId != null) {
+                                matchedProfile = likedProfile
+                                showMatchModal = true
+                            }
                         }
                         if (displayProfiles.isNotEmpty()) {
                             currentProfileIndex = (currentProfileIndex + 1) % displayProfiles.size

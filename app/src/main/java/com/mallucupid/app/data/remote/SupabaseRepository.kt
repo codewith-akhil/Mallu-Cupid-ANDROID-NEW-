@@ -8,11 +8,16 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import com.mallucupid.app.data.remote.SupabaseClient.moshi
 import com.squareup.moshi.Types
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Supabase data repository — thin REST/PostgREST wrapper for all tables.
  * Uses the in-memory access token set by SupabaseAuth. Returns null on error
  * (caller shows a Toast / falls back to local data).
+ *
+ * Every suspend function switches to Dispatchers.IO internally so callers
+ * cannot accidentally trigger NetworkOnMainThreadException.
  */
 object SupabaseRepository {
 
@@ -44,13 +49,13 @@ object SupabaseRepository {
 
     // ---------- Swipe deck ----------
 
-    suspend fun getSwipeDeck(limit: Int = 10): List<DatingProfile> {
+    suspend fun getSwipeDeck(limit: Int = 10): List<DatingProfile> = withContext(Dispatchers.IO) {
         val body = reqAdapter.toJson(mapOf("p_limit" to limit))
         val req = Request.Builder()
             .url("${SupabaseConfig.REST_BASE}/rpc/get_swipe_deck")
             .post(body.toRequestBody(json))
             .build()
-        return SupabaseClient.http.newCall(req).execute().use { resp ->
+        SupabaseClient.http.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) emptyList()
             else deckAdapter.fromJson(resp.body?.string().orEmpty()).orEmpty().map { it.toDatingProfile() }
         }
@@ -58,24 +63,24 @@ object SupabaseRepository {
 
     // ---------- Swipes ----------
 
-    suspend fun recordSwipe(swiperId: String, swipedId: String, action: String): Boolean {
+    suspend fun recordSwipe(swiperId: String, swipedId: String, action: String): Boolean = withContext(Dispatchers.IO) {
         val body = swipeAdapter.toJson(SwipeInsert(swiperId, swipedId, action))
         val req = Request.Builder()
             .url("${SupabaseConfig.REST_BASE}/swipes")
             .header("Prefer", "return=minimal")
             .post(body.toRequestBody(json))
             .build()
-        return SupabaseClient.http.newCall(req).execute().use { it.isSuccessful }
+        SupabaseClient.http.newCall(req).execute().use { it.isSuccessful }
     }
 
     // ---------- Matches ----------
 
-    suspend fun getMatches(userId: String): List<MatchDto> {
+    suspend fun getMatches(userId: String): List<MatchDto> = withContext(Dispatchers.IO) {
         val req = Request.Builder()
             .url("${SupabaseConfig.REST_BASE}/matches" +
                   "?or=(user1_id.eq.$userId,user2_id.eq.$userId)&order=created_at.desc")
             .get().build()
-        return SupabaseClient.http.newCall(req).execute().use { resp ->
+        SupabaseClient.http.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) emptyList()
             else matchListAdapter.fromJson(resp.body?.string().orEmpty()).orEmpty()
         }
@@ -83,12 +88,12 @@ object SupabaseRepository {
 
     // ---------- Messages ----------
 
-    suspend fun getMessages(matchId: String): List<MessageDto> {
+    suspend fun getMessages(matchId: String): List<MessageDto> = withContext(Dispatchers.IO) {
         val req = Request.Builder()
             .url("${SupabaseConfig.REST_BASE}/messages" +
                   "?match_id=eq.$matchId&order=created_at.asc")
             .get().build()
-        return SupabaseClient.http.newCall(req).execute().use { resp ->
+        SupabaseClient.http.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) emptyList()
             else msgListAdapter.fromJson(resp.body?.string().orEmpty()).orEmpty()
         }
@@ -99,7 +104,7 @@ object SupabaseRepository {
         content: String, type: String = "text",
         mediaUrl: String? = null, audioDuration: String? = null,
         replyToId: Long? = null,
-    ): MessageDto? {
+    ): MessageDto? = withContext(Dispatchers.IO) {
         val ins = MessageInsert(matchId, senderId, receiverId, content, type, mediaUrl, audioDuration, replyToId)
         val body = msgInsertAdapter.toJson(ins)
         val req = Request.Builder()
@@ -107,7 +112,7 @@ object SupabaseRepository {
             .header("Prefer", "return=representation")
             .post(body.toRequestBody(json))
             .build()
-        return SupabaseClient.http.newCall(req).execute().use { resp ->
+        SupabaseClient.http.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) null
             else {
                 val list = msgListAdapter.fromJson(resp.body?.string().orEmpty()).orEmpty()
@@ -116,14 +121,14 @@ object SupabaseRepository {
         }
     }
 
-    suspend fun markMessageRead(messageId: Long): Boolean {
+    suspend fun markMessageRead(messageId: Long): Boolean = withContext(Dispatchers.IO) {
         val body = reqAdapter.toJson(mapOf("is_read" to true))
         val req = Request.Builder()
             .url("${SupabaseConfig.REST_BASE}/messages?id=eq.$messageId")
             .header("Prefer", "return=minimal")
             .patch(body.toRequestBody(json))
             .build()
-        return SupabaseClient.http.newCall(req).execute().use { it.isSuccessful }
+        SupabaseClient.http.newCall(req).execute().use { it.isSuccessful }
     }
 
     /**
@@ -131,7 +136,7 @@ object SupabaseRepository {
      * which user is user1 vs user2. Returns null if no match row exists or the
      * request fails — callers fall back to a local sample conversation.
      */
-    suspend fun getMatchId(userId: String, partnerId: String): String? {
+    suspend fun getMatchId(userId: String, partnerId: String): String? = withContext(Dispatchers.IO) {
         val req = Request.Builder()
             .url(
                 "${SupabaseConfig.REST_BASE}/matches" +
@@ -139,7 +144,7 @@ object SupabaseRepository {
                     "and(user1_id.eq.$partnerId,user2_id.eq.$userId))&limit=1"
             )
             .get().build()
-        return SupabaseClient.http.newCall(req).execute().use { resp ->
+        SupabaseClient.http.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) null
             else matchListAdapter.fromJson(resp.body?.string().orEmpty()).orEmpty().firstOrNull()?.id
         }
@@ -151,7 +156,7 @@ object SupabaseRepository {
      * with PostgREST's `Prefer: resolution=merge-duplicates` makes this an upsert
      * so the emoji is replaced if the user already reacted.
      */
-    suspend fun addReaction(messageId: Long, userId: String, emoji: String): Boolean {
+    suspend fun addReaction(messageId: Long, userId: String, emoji: String): Boolean = withContext(Dispatchers.IO) {
         val ins = ReactionInsert(messageId, userId, emoji)
         val body = reactionAdapter.toJson(ins)
         val req = Request.Builder()
@@ -159,14 +164,14 @@ object SupabaseRepository {
             .header("Prefer", "return=minimal,resolution=merge-duplicates")
             .post(body.toRequestBody(json))
             .build()
-        return SupabaseClient.http.newCall(req).execute().use { it.isSuccessful }
+        SupabaseClient.http.newCall(req).execute().use { it.isSuccessful }
     }
 
     /**
      * Deletes the calling user's reaction on the given message. Safe to call
      * even if no reaction row exists (PostgREST DELETE is idempotent).
      */
-    suspend fun removeReaction(messageId: Long, userId: String): Boolean {
+    suspend fun removeReaction(messageId: Long, userId: String): Boolean = withContext(Dispatchers.IO) {
         val req = Request.Builder()
             .url(
                 "${SupabaseConfig.REST_BASE}/message_reactions" +
@@ -175,12 +180,12 @@ object SupabaseRepository {
             .header("Prefer", "return=minimal")
             .delete()
             .build()
-        return SupabaseClient.http.newCall(req).execute().use { it.isSuccessful }
+        SupabaseClient.http.newCall(req).execute().use { it.isSuccessful }
     }
 
     // ---------- Profile save (onboarding complete) ----------
 
-    suspend fun saveProfile(userId: String, email: String, draft: OnboardingDraft): Boolean {
+    suspend fun saveProfile(userId: String, email: String, draft: OnboardingDraft): Boolean = withContext(Dispatchers.IO) {
         val profile = ProfileUpsert(
             id = userId,
             name = draft.name,
@@ -237,7 +242,7 @@ object SupabaseRepository {
             .patch(body.toRequestBody(json))
             .build()
         val profileOk = SupabaseClient.http.newCall(req).execute().use { it.isSuccessful }
-        if (!profileOk) return false
+        if (!profileOk) return@withContext false
 
         // Replace photos (delete + insert)
         SupabaseClient.http.newCall(
@@ -301,7 +306,7 @@ object SupabaseRepository {
                 .build()
         ).execute().close()
 
-        return true
+        return@withContext true
     }
 
     // ---------- Settings (load / save) ----------
@@ -310,11 +315,11 @@ object SupabaseRepository {
      * Loads the user_settings row for the given user. Returns null on error
      * (caller falls back to in-memory draft defaults).
      */
-    suspend fun loadUserSettings(userId: String): SettingsDto? {
+    suspend fun loadUserSettings(userId: String): SettingsDto? = withContext(Dispatchers.IO) {
         val req = Request.Builder()
             .url("${SupabaseConfig.REST_BASE}/user_settings?user_id=eq.$userId")
             .get().build()
-        return SupabaseClient.http.newCall(req).execute().use { resp ->
+        SupabaseClient.http.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) null
             else settingsListAdapter.fromJson(resp.body?.string().orEmpty()).orEmpty().firstOrNull()
         }
@@ -324,14 +329,14 @@ object SupabaseRepository {
      * Loads just the settings-related columns of the profiles row
      * (online flag, chat privacy, distance, age range, interested_in, dont_show_*).
      */
-    suspend fun loadProfileSettings(userId: String): ProfileSettingsDto? {
+    suspend fun loadProfileSettings(userId: String): ProfileSettingsDto? = withContext(Dispatchers.IO) {
         val req = Request.Builder()
             .url(
                 "${SupabaseConfig.REST_BASE}/profiles?id=eq.$userId" +
                     "&select=is_online,photo_verified_only_chat,max_distance_km,age_min,age_max,interested_in,dont_show_age,dont_show_distance"
             )
             .get().build()
-        return SupabaseClient.http.newCall(req).execute().use { resp ->
+        SupabaseClient.http.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) null
             else profileSettingsListAdapter.fromJson(resp.body?.string().orEmpty()).orEmpty().firstOrNull()
         }
@@ -342,14 +347,14 @@ object SupabaseRepository {
      * omitted by Moshi, so PostgREST only updates the columns we set.
      * Uses merge-duplicates so the row is upserted if missing.
      */
-    suspend fun saveUserSettings(userId: String, settings: SettingsUpsert): Boolean {
+    suspend fun saveUserSettings(userId: String, settings: SettingsUpsert): Boolean = withContext(Dispatchers.IO) {
         val body = settingsAdapter.toJson(settings)
         val req = Request.Builder()
             .url("${SupabaseConfig.REST_BASE}/user_settings?user_id=eq.$userId")
             .header("Prefer", "return=minimal,resolution=merge-duplicates")
             .patch(body.toRequestBody(json))
             .build()
-        return SupabaseClient.http.newCall(req).execute().use { it.isSuccessful }
+        SupabaseClient.http.newCall(req).execute().use { it.isSuccessful }
     }
 
     /**
@@ -357,14 +362,14 @@ object SupabaseRepository {
      * age range, interested_in). Null fields are omitted by Moshi so
      * PostgREST only touches the columns we explicitly set.
      */
-    suspend fun saveProfileSettings(patch: ProfileSettingsPatch, userId: String): Boolean {
+    suspend fun saveProfileSettings(patch: ProfileSettingsPatch, userId: String): Boolean = withContext(Dispatchers.IO) {
         val body = profileSettingsPatchAdapter.toJson(patch)
         val req = Request.Builder()
             .url("${SupabaseConfig.REST_BASE}/profiles?id=eq.$userId")
             .header("Prefer", "return=minimal")
             .patch(body.toRequestBody(json))
             .build()
-        return SupabaseClient.http.newCall(req).execute().use { it.isSuccessful }
+        SupabaseClient.http.newCall(req).execute().use { it.isSuccessful }
     }
 
     // ---------- DTO → domain mapping ----------

@@ -52,6 +52,8 @@ fun LoadingStateScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(DashboardBg)
+            .statusBarsPadding()
+            .navigationBarsPadding()
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
@@ -136,6 +138,8 @@ fun NoInternetScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(DashboardBg)
+            .statusBarsPadding()
+            .navigationBarsPadding()
             .padding(28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
@@ -237,6 +241,8 @@ fun ErrorStateScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(DashboardBg)
+            .statusBarsPadding()
+            .navigationBarsPadding()
             .padding(28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
@@ -323,6 +329,8 @@ fun SuccessStateScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(DashboardBg)
+            .statusBarsPadding()
+            .navigationBarsPadding()
             .padding(28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center

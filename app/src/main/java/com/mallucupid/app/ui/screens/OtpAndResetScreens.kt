@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.sp
 import com.mallucupid.app.ui.theme.*
 import com.mallucupid.app.data.remote.SupabaseAuth
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun ResetPasswordScreen(
@@ -31,13 +32,8 @@ fun ResetPasswordScreen(
     onBackToSignIn: () -> Unit
 ) {
     var email by remember { mutableStateOf("") }
-    var loading by remember { mutableStateOf(false) }
 
     AuthBackground {
-        if (loading) {
-            LoadingOverlay(message = "Sending OTP...")
-        }
-
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val isCompact = maxHeight < 620.dp
             val scrollState = rememberScrollState()
@@ -122,6 +118,7 @@ fun OtpVerificationScreen(
     val focusRequesters = List(6) { remember { FocusRequester() } }
     val focusManager = LocalFocusManager.current
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     // 60-second resend countdown — restarts whenever resendTrigger changes.
     LaunchedEffect(resendTrigger) {
@@ -252,10 +249,17 @@ fun OtpVerificationScreen(
                 // Resend code button — disabled while countdown > 0, enabled at 0.
                 TextButton(
                     onClick = {
-                        otp = List(6) { "" }
-                        resendSeconds = 60
-                        resendTrigger++
-                        Toast.makeText(context, "Code resent", Toast.LENGTH_SHORT).show()
+                        scope.launch {
+                            val err = SupabaseAuth.sendOtp(email)
+                            if (err != null) {
+                                Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                                return@launch
+                            }
+                            otp = List(6) { "" }
+                            resendSeconds = 60
+                            resendTrigger++
+                            Toast.makeText(context, "Code resent", Toast.LENGTH_SHORT).show()
+                        }
                     },
                     enabled = resendSeconds == 0,
                     contentPadding = if (isCompact) PaddingValues(horizontal = 8.dp, vertical = 2.dp)

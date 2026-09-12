@@ -172,6 +172,7 @@ data class SettingsUpsert(
     @Json(name = "push_super_likes") val pushSuperLikes: Boolean? = null,
     @Json(name = "push_promos") val pushPromos: Boolean? = null,
     @Json(name = "push_likes_frequency") val pushLikesFrequency: String? = null,
+    @Json(name = "push_likes_enabled") val pushLikesEnabled: Boolean? = null,
 )
 
 /**
@@ -193,6 +194,7 @@ data class SettingsDto(
     @Json(name = "push_super_likes") val pushSuperLikes: Boolean? = null,
     @Json(name = "push_promos") val pushPromos: Boolean? = null,
     @Json(name = "push_likes_frequency") val pushLikesFrequency: String? = null,
+    @Json(name = "push_likes_enabled") val pushLikesEnabled: Boolean? = null,
 )
 
 /**

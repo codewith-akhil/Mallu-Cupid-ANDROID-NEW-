@@ -1,5 +1,6 @@
 package com.mallucupid.app.data.remote
 
+import com.mallucupid.app.BuildConfig
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import okhttp3.Interceptor
@@ -38,7 +39,8 @@ object SupabaseClient {
             .readTimeout(30, TimeUnit.SECONDS)
             .addInterceptor(headerInterceptor)
             .addInterceptor(HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.BASIC
+                level = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BASIC
+                        else HttpLoggingInterceptor.Level.NONE
             })
             .build()
     }
