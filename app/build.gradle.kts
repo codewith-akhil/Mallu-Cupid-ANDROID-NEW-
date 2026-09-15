@@ -14,22 +14,22 @@ android {
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.mallucupid.app"
+    applicationId = "com.mallucupid.connect"
     minSdk = 26
     targetSdk = 36
-    versionCode = 3
-    versionName = "1.0.2"
+    versionCode = 1
+    versionName = "1.0.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
   signingConfigs {
     create("release") {
-      val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/mallucupid-release-key.jks"
+      val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/mallucupid-connect-key.jks"
       storeFile = file(keystorePath)
-      storePassword = System.getenv("STORE_PASSWORD") ?: "Mallu@Cupid#2026"
+      storePassword = System.getenv("STORE_PASSWORD") ?: "6RuQ2T0D8oRv4FSzSsh0sAoV7Ygo"
       keyAlias = System.getenv("KEY_ALIAS") ?: "mallucupid"
-      keyPassword = System.getenv("KEY_PASSWORD") ?: "Mallu@Cupid#2026"
+      keyPassword = System.getenv("KEY_PASSWORD") ?: "6RuQ2T0D8oRv4FSzSsh0sAoV7Ygo"
     }
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")
@@ -101,6 +101,7 @@ dependencies {
   implementation(libs.coil.compose)
   implementation(libs.converter.moshi)
   implementation(libs.firebase.ai)
+implementation(libs.firebase.messaging)
   // Uncomment to use Firestore:
   // implementation(libs.firebase.firestore)
 
