@@ -40,6 +40,9 @@ fun ProfileViewContent(
     val scrollState = rememberScrollState()
     var subscriptionCardIndex by remember { mutableIntStateOf(0) } // 0: Premium (₹49/wk), 1: Gold, 2: Platinum
     var showFeaturesModal by remember { mutableStateOf(false) }
+    // Sign-out confirmation dialog state
+    var showSignOutDialog by remember { mutableStateOf(false) }
+    var signingOut by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -404,7 +407,7 @@ fun ProfileViewContent(
 
         // Sign Out Button
         Surface(
-            onClick = onSignOut,
+            onClick = { showSignOutDialog = true },
             shape = RoundedCornerShape(16.dp),
             color = TinderSurface,
             border = BorderStroke(1.dp, TinderBorder),
@@ -451,6 +454,59 @@ fun ProfileViewContent(
                 }
             },
             containerColor = TinderSurface
+        )
+    }
+
+    // Sign Out confirmation dialog (child of the existing root container — no inset change)
+    if (showSignOutDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!signingOut) showSignOutDialog = false
+            },
+            title = {
+                Text(
+                    text = "Sign Out?",
+                    fontWeight = FontWeight.Bold,
+                    color = DashboardCream
+                )
+            },
+            text = {
+                Text(
+                    text = "Are you sure you want to sign out? You'll need your email and password to sign back in.",
+                    color = DashboardMutedBeige,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        signingOut = true
+                        onSignOut()
+                    },
+                    enabled = !signingOut,
+                    colors = ButtonDefaults.buttonColors(containerColor = NopeCoral)
+                ) {
+                    if (signingOut) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text("Sign Out", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showSignOutDialog = false },
+                    enabled = !signingOut
+                ) {
+                    Text("Cancel", color = DashboardNavMuted)
+                }
+            },
+            containerColor = DashboardCard
         )
     }
 }

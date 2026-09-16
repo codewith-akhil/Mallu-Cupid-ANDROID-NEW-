@@ -287,6 +287,8 @@ fun ChatViewContent(
     var voiceRecordSeconds by remember { mutableIntStateOf(0) }
     // Feature #27 — Chat tray tab: 0 = Matches, 1 = Requests
     var chatTrayTab by remember { mutableIntStateOf(0) }
+    // Block confirmation dialog state (stores the profile ID to block, or null when dismissed)
+    var showBlockConfirm by remember { mutableStateOf<String?>(null) }
     // Feature #27 — Mutable sample message requests list (Accept moves to Matches, Block removes).
     val sampleRequests = remember {
         mutableStateListOf(
@@ -2183,14 +2185,7 @@ fun ChatViewContent(
                                                 }
                                                 // Block — outlined NopeCoral.
                                                 Surface(
-                                                    onClick = {
-                                                        Toast.makeText(
-                                                            context,
-                                                            "Blocked",
-                                                            Toast.LENGTH_SHORT
-                                                        ).show()
-                                                        sampleRequests.removeAll { it.profile.id == request.profile.id }
-                                                    },
+                                                    onClick = { showBlockConfirm = request.profile.id },
                                                     shape = RoundedCornerShape(50),
                                                     color = Color.Transparent,
                                                     border = BorderStroke(1.dp, NopeCoral)
@@ -2715,6 +2710,50 @@ fun ChatViewContent(
                     colors = ButtonDefaults.buttonColors(containerColor = DashboardTerracotta)
                 ) {
                     Text("Understood", color = Color.White)
+                }
+            },
+            containerColor = DashboardCard
+        )
+    }
+
+    // =========================================================================
+    // BLOCK CONFIRMATION DIALOG (message-requests tab)
+    // Renders after the requests list. Removes the request + Toast "Blocked"
+    // when confirmed; clears state on dismiss.
+    // =========================================================================
+    showBlockConfirm?.let { profileId ->
+        AlertDialog(
+            onDismissRequest = { showBlockConfirm = null },
+            title = {
+                Text(
+                    text = "Block this user?",
+                    fontWeight = FontWeight.Bold,
+                    color = DashboardCream
+                )
+            },
+            text = {
+                Text(
+                    text = "They won't be able to see your profile or contact you again.",
+                    color = DashboardMutedBeige,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        sampleRequests.removeAll { it.profile.id == profileId }
+                        Toast.makeText(context, "Blocked", Toast.LENGTH_SHORT).show()
+                        showBlockConfirm = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = NopeCoral)
+                ) {
+                    Text("Block", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBlockConfirm = null }) {
+                    Text("Cancel", color = DashboardNavMuted)
                 }
             },
             containerColor = DashboardCard

@@ -47,6 +47,9 @@ fun ExpandedProfileSheet(
     var replyTopic by remember { mutableStateOf("") }
     var replyText by remember { mutableStateOf("") }
     var actionToast by remember { mutableStateOf<String?>(null) }
+    // Block confirmation dialog state
+    var showBlockDialog by remember { mutableStateOf(false) }
+    var blockLoading by remember { mutableStateOf(false) }
 
     LaunchedEffect(actionToast) {
         if (actionToast != null) {
@@ -637,7 +640,7 @@ fun ExpandedProfileSheet(
                 Spacer(modifier = Modifier.height(10.dp))
 
                 Surface(
-                    onClick = { actionToast = "${profile.name} has been blocked" },
+                    onClick = { showBlockDialog = true },
                     shape = RoundedCornerShape(16.dp),
                     color = TinderSurface,
                     border = BorderStroke(1.dp, TinderBorder),
@@ -842,6 +845,63 @@ fun ExpandedProfileSheet(
                     }
                 },
                 containerColor = TinderSurface
+            )
+        }
+
+        // Block confirmation dialog (child of the existing root — no inset change)
+        // TODO: wire onBlock DB call from DashboardScreen — currently shows Toast + dismisses.
+        if (showBlockDialog) {
+            AlertDialog(
+                onDismissRequest = {
+                    if (!blockLoading) showBlockDialog = false
+                },
+                title = {
+                    Text(
+                        text = "Block ${profile.name}?",
+                        fontWeight = FontWeight.Bold,
+                        color = DashboardCream
+                    )
+                },
+                text = {
+                    Text(
+                        text = "They won't be able to see your profile or contact you. You can unblock them later from Settings.",
+                        color = DashboardMutedBeige,
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            blockLoading = true
+                            // TODO: wire onBlock() DB call — for now simulate with Toast + dismiss.
+                            actionToast = "Blocked"
+                            showBlockDialog = false
+                            blockLoading = false
+                        },
+                        enabled = !blockLoading,
+                        colors = ButtonDefaults.buttonColors(containerColor = NopeCoral)
+                    ) {
+                        if (blockLoading) {
+                            CircularProgressIndicator(
+                                color = Color.White,
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text("Block", color = Color.White, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { showBlockDialog = false },
+                        enabled = !blockLoading
+                    ) {
+                        Text("Cancel", color = DashboardNavMuted)
+                    }
+                },
+                containerColor = DashboardCard
             )
         }
     }

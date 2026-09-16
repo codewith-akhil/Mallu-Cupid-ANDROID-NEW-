@@ -62,6 +62,9 @@ fun AccountSettingsScreen(
     // ---- Action loading states ----
     var unblockLoading by remember { mutableStateOf(false) }
     var deleteLoading by remember { mutableStateOf(false) }
+    // Sign-out confirmation dialog state
+    var showSignOutDialog by remember { mutableStateOf(false) }
+    var signingOut by remember { mutableStateOf(false) }
 
     // ---- Settings persistence state (MAIN view only) ----
     val sessionUserId = remember { SessionManager.current()?.userId }
@@ -990,7 +993,7 @@ fun AccountSettingsScreen(
 
                     // Log out option
                     TextButton(
-                        onClick = onSignOut,
+                        onClick = { showSignOutDialog = true },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
@@ -1017,6 +1020,59 @@ fun AccountSettingsScreen(
                                 modifier = Modifier.size(36.dp)
                             )
                         }
+                    }
+
+                    // Sign Out confirmation dialog (child of the existing root — no inset change)
+                    if (showSignOutDialog) {
+                        AlertDialog(
+                            onDismissRequest = {
+                                if (!signingOut) showSignOutDialog = false
+                            },
+                            title = {
+                                Text(
+                                    text = "Sign Out?",
+                                    fontWeight = FontWeight.Bold,
+                                    color = DashboardCream
+                                )
+                            },
+                            text = {
+                                Text(
+                                    text = "Are you sure you want to sign out? You'll need your email and password to sign back in.",
+                                    color = DashboardMutedBeige,
+                                    fontSize = 14.sp,
+                                    lineHeight = 20.sp
+                                )
+                            },
+                            confirmButton = {
+                                Button(
+                                    onClick = {
+                                        signingOut = true
+                                        onSignOut()
+                                    },
+                                    enabled = !signingOut,
+                                    colors = ButtonDefaults.buttonColors(containerColor = NopeCoral)
+                                ) {
+                                    if (signingOut) {
+                                        CircularProgressIndicator(
+                                            color = Color.White,
+                                            modifier = Modifier.size(16.dp),
+                                            strokeWidth = 2.dp
+                                        )
+                                    } else {
+                                        Text("Sign Out", color = Color.White, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(
+                                    onClick = { showSignOutDialog = false },
+                                    enabled = !signingOut
+                                ) {
+                                    Text("Cancel", color = DashboardNavMuted)
+                                }
+                            },
+                            containerColor = DashboardCard
+                        )
                     }
                 }
             }

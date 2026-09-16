@@ -91,6 +91,7 @@ fun EditProfileScreen(
 
     // Dialog & bottom sheet states
     var showLogoutConfirmDialog by remember { mutableStateOf(false) }
+    var signingOut by remember { mutableStateOf(false) }
     var showHelpDialog by remember { mutableStateOf(false) }
     var helpDialogTopic by remember { mutableStateOf("Safety & Dating Tips") }
     var showLegalDialog by remember { mutableStateOf(false) }
@@ -1373,7 +1374,9 @@ fun EditProfileScreen(
     // ==========================================
     if (showLogoutConfirmDialog) {
         AlertDialog(
-            onDismissRequest = { showLogoutConfirmDialog = false },
+            onDismissRequest = {
+                if (!signingOut) showLogoutConfirmDialog = false
+            },
             icon = {
                 Icon(
                     imageVector = Icons.Default.Logout,
@@ -1401,17 +1404,27 @@ fun EditProfileScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        showLogoutConfirmDialog = false
+                        signingOut = true
                         onSignOut()
                     },
+                    enabled = !signingOut,
                     colors = ButtonDefaults.buttonColors(containerColor = NopeCoral)
                 ) {
-                    Text("Log Out", color = Color.White, fontWeight = FontWeight.Bold)
+                    if (signingOut) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text("Log Out", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
                 }
             },
             dismissButton = {
                 OutlinedButton(
                     onClick = { showLogoutConfirmDialog = false },
+                    enabled = !signingOut,
                     border = BorderStroke(1.dp, Color(0xFF4A3A33)),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = DashboardMutedBeige)
                 ) {
