@@ -73,6 +73,16 @@ object SupabaseRepository {
         SupabaseClient.http.newCall(req).execute().use { it.isSuccessful }
     }
 
+    /** Deletes a swipe record (used for rewind — lets the profile reappear in the deck). */
+    suspend fun deleteSwipe(swiperId: String, swipedId: String): Boolean = withContext(Dispatchers.IO) {
+        val req = Request.Builder()
+            .url("${SupabaseConfig.REST_BASE}/swipes?swiper_id=eq.$swiperId&swiped_id=eq.$swipedId")
+            .header("Prefer", "return=minimal")
+            .delete()
+            .build()
+        SupabaseClient.http.newCall(req).execute().use { it.isSuccessful }
+    }
+
     // ---------- Matches ----------
 
     suspend fun getMatches(userId: String): List<MatchDto> = withContext(Dispatchers.IO) {

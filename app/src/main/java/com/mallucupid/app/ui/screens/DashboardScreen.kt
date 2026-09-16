@@ -59,16 +59,23 @@ fun DashboardScreen(
 ) {
     val profiles = remember { mutableStateListOf(*SampleProfiles.list.toTypedArray()) }
     val coroutineScope = rememberCoroutineScope()
-    // Load the real swipe deck from Supabase on first composition, falling back
-    // to the bundled SampleProfiles if the deck is empty or the call fails
-    // (e.g. before edge functions are deployed or before other users exist).
+    var deckLoading by remember { mutableStateOf(false) }
+
+    // Load the real swipe deck from Supabase on first composition.
+    // Shows a loading spinner while fetching. Falls back to bundled
+    // SampleProfiles if the deck is empty or the call fails.
     LaunchedEffect(Unit) {
         val session = SessionManager.current()
         if (session?.userId != null) {
-            val deck = SupabaseRepository.getSwipeDeck(limit = 20)
-            if (deck.isNotEmpty()) {
-                profiles.clear()
-                profiles.addAll(deck)
+            deckLoading = true
+            try {
+                val deck = SupabaseRepository.getSwipeDeck(limit = 20)
+                if (deck.isNotEmpty()) {
+                    profiles.clear()
+                    profiles.addAll(deck)
+                }
+            } finally {
+                deckLoading = false
             }
         }
     }
@@ -267,12 +274,25 @@ fun DashboardScreen(
                 val p = activeExp
                 expandedProfile = null
                 actionToast = "Passed on ${p.name}"
+                coroutineScope.launch {
+                    val uid = SessionManager.current()?.userId ?: return@launch
+                    SupabaseRepository.recordSwipe(uid, p.id, "pass")
+                }
                 if (displayProfiles.isNotEmpty()) {
                     currentProfileIndex = (currentProfileIndex + 1) % displayProfiles.size
                 }
             },
             onSuperLike = {
-                actionToast = "Super Liked ${activeExp.name}!"
+                actionToast = "Super Liked ${activeExp.name}! ⭐"
+                coroutineScope.launch {
+                    val uid = SessionManager.current()?.userId ?: return@launch
+                    SupabaseRepository.recordSwipe(uid, activeExp.id, "superlike")
+                    val matchId = SupabaseRepository.getMatchId(uid, activeExp.id)
+                    if (matchId != null) {
+                        matchedProfile = activeExp
+                        showMatchModal = true
+                    }
+                }
                 expandedProfile = null
             },
             onReplyPrompt = { topic, msg ->
@@ -294,6 +314,31 @@ fun DashboardScreen(
             .statusBarsPadding()
             .navigationBarsPadding()
     ) {
+        // Deck loading overlay — shown while fetching profiles from Supabase
+        if (deckLoading) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(DashboardBg.copy(alpha = 0.85f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(
+                        color = DashboardTerracotta,
+                        strokeWidth = 3.dp,
+                        modifier = Modifier.size(40.dp)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "Finding singles nearby...",
+                        color = DashboardPeach,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+        }
+
         // Main view depending on bottom nav
         when (activeNav) {
             "Swipe" -> {
@@ -331,7 +376,15 @@ fun DashboardScreen(
                     },
                     onRewind = {
                         if (displayProfiles.isNotEmpty()) {
-                            currentProfileIndex = (currentProfileIndex - 1 + displayProfiles.size) % displayProfiles.size
+                            val prevIndex = (currentProfileIndex - 1 + displayProfiles.size) % displayProfiles.size
+                            val prevProfile = displayProfiles[prevIndex]
+                            // Delete the previous swipe from DB so the profile
+                            // reappears in future decks.
+                            coroutineScope.launch {
+                                val uid = SessionManager.current()?.userId ?: return@launch
+                                SupabaseRepository.deleteSwipe(uid, prevProfile.id)
+                            }
+                            currentProfileIndex = prevIndex
                             actionToast = "Rewound to previous profile"
                         }
                     },
@@ -350,6 +403,16 @@ fun DashboardScreen(
                     },
                     onSuperLike = { superLikedProfile ->
                         actionToast = "Super Liked ${superLikedProfile.name}! ⭐"
+                        coroutineScope.launch {
+                            val uid = SessionManager.current()?.userId ?: return@launch
+                            SupabaseRepository.recordSwipe(uid, superLikedProfile.id, "superlike")
+                            // Check if this super-like created a mutual match.
+                            val matchId = SupabaseRepository.getMatchId(uid, superLikedProfile.id)
+                            if (matchId != null) {
+                                matchedProfile = superLikedProfile
+                                showMatchModal = true
+                            }
+                        }
                         if (displayProfiles.isNotEmpty()) {
                             currentProfileIndex = (currentProfileIndex + 1) % displayProfiles.size
                         }
