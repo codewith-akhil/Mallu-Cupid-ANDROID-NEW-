@@ -29,10 +29,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.mallucupid.app.data.DatingProfile
+import com.mallucupid.app.data.remote.SupabaseRepository
 import com.mallucupid.app.ui.theme.*
 
 @Composable
 fun LikesViewContent(
+    userId: String?,
     profiles: List<DatingProfile>,
     onSelectProfile: (DatingProfile) -> Unit,
     onUpgradeToPremium: () -> Unit = {}
@@ -40,6 +42,24 @@ fun LikesViewContent(
     var selectedLikesTab by remember { mutableStateOf(0) } // 0: 0 likes, 1: Likes sent, 2: Top Picks
     var showGoldModal by remember { mutableStateOf(false) }
     var modalFeatureTitle by remember { mutableStateOf("Mallu Cupid Gold") }
+
+    // Real DB state — loaded async on first composition / when userId changes.
+    var likesReceivedCount by remember { mutableStateOf(0) }
+    var likesSentProfiles by remember { mutableStateOf<List<DatingProfile>>(emptyList()) }
+    var likesLoading by remember { mutableStateOf(true) }
+
+    LaunchedEffect(userId) {
+        if (userId.isNullOrBlank()) {
+            likesLoading = false
+            return@LaunchedEffect
+        }
+        try {
+            likesReceivedCount = SupabaseRepository.getLikesReceivedCount(userId)
+            likesSentProfiles = SupabaseRepository.getLikesSent(userId)
+        } finally {
+            likesLoading = false
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -74,7 +94,7 @@ fun LikesViewContent(
                 onClick = { selectedLikesTab = 0 },
                 text = {
                     Text(
-                        text = "0 likes",
+                        text = "$likesReceivedCount likes",
                         fontWeight = if (selectedLikesTab == 0) FontWeight.Bold else FontWeight.Normal,
                         color = if (selectedLikesTab == 0) TinderTextPrimary else TinderTextSecondary
                     )
@@ -202,22 +222,35 @@ fun LikesViewContent(
                             )
                         }
 
-                        // Grid of profiles
-                        val likesSentProfiles = profiles.take(4)
-                        LazyVerticalGrid(
-                            columns = GridCells.Fixed(2),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(12.dp)
-                        ) {
-                            items(likesSentProfiles) { profile ->
-                                ProfileGridCard(
-                                    profile = profile,
-                                    timeBadge = "24h left",
-                                    onClick = { onSelectProfile(profile) }
+                        // Grid of profiles (real DB-loaded list, with a centered
+                        // loading spinner while the fetch is in flight).
+                        if (likesLoading && likesSentProfiles.isEmpty()) {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    color = DashboardTerracotta,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(24.dp)
                                 )
+                            }
+                        } else {
+                            LazyVerticalGrid(
+                                columns = GridCells.Fixed(2),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(12.dp)
+                            ) {
+                                items(likesSentProfiles) { profile ->
+                                    ProfileGridCard(
+                                        profile = profile,
+                                        timeBadge = "24h left",
+                                        onClick = { onSelectProfile(profile) }
+                                    )
+                                }
                             }
                         }
                     }
@@ -354,7 +387,10 @@ fun LikesViewContent(
             },
             confirmButton = {
                 Button(
-                    onClick = { showGoldModal = false },
+                    onClick = {
+                        showGoldModal = false
+                        onUpgradeToPremium()
+                    },
                     shape = RoundedCornerShape(50),
                     colors = ButtonDefaults.buttonColors(containerColor = TinderGold)
                 ) {

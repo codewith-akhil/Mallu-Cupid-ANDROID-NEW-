@@ -79,6 +79,25 @@ fun DashboardScreen(
             }
         }
     }
+
+    // Real per-category counts for the Explore tab. Fetched once on first
+    // composition by counting `lookingFor` values across a wider deck
+    // (limit=100). Falls back to the hardcoded defaults baked into
+    // ExploreSpaceItem if the call fails or returns nothing.
+    var exploreCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    LaunchedEffect(Unit) {
+        val session = SessionManager.current()
+        if (session?.userId != null) {
+            try {
+                val deck = SupabaseRepository.getSwipeDeck(limit = 100)
+                if (deck.isNotEmpty()) {
+                    exploreCounts = deck.groupingBy { it.lookingFor }.eachCount()
+                }
+            } catch (_: Exception) {
+                // Keep emptyMap() — ExploreViewContent falls back to defaults.
+            }
+        }
+    }
     val haptic = LocalHapticFeedback.current
     val unreadChatCount = 2 // TODO: replace static demo count with real unread-chats state from ChatViewModel
     var currentDraft by remember { mutableStateOf(userDraft) }
@@ -429,12 +448,14 @@ fun DashboardScreen(
                         activeCategoryFilter = cat
                         activeNav = "Swipe"
                         actionToast = "Showing $cat nearby"
-                    }
+                    },
+                    categoryCounts = exploreCounts
                 )
             }
 
             "Likes" -> {
                 LikesViewContent(
+                    userId = SessionManager.current()?.userId,
                     profiles = profiles,
                     onSelectProfile = { p ->
                         expandedProfile = p

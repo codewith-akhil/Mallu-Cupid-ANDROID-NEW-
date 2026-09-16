@@ -26,6 +26,9 @@ object SupabaseRepository {
     private val deckAdapter = Types.newParameterizedType(
         List::class.java, SwipeDeckProfileDto::class.java
     ).let { moshi.adapter<List<SwipeDeckProfileDto>>(it) }
+    private val idsListAdapter = Types.newParameterizedType(
+        List::class.java, Map::class.java
+    ).let { moshi.adapter<List<Map<String, Any?>>>(it) }
     private val matchListAdapter = Types.newParameterizedType(
         List::class.java, MatchDto::class.java
     ).let { moshi.adapter<List<MatchDto>>(it) }
@@ -81,6 +84,62 @@ object SupabaseRepository {
             .delete()
             .build()
         SupabaseClient.http.newCall(req).execute().use { it.isSuccessful }
+    }
+
+    // ---------- Likes received / sent ----------
+
+    /**
+     * Counts rows in `swipes` where the given user was swiped-on with a
+     * 'like' or 'superlike' action. Uses PostgREST's `Prefer: count=exact`
+     * + `Range: 0-0` headers and reads the total from the `content-range`
+     * response header.
+     *
+     * TODO(RLS): the current `swipes_self_read` policy only allows reading
+     * rows where `swiper_id = auth.uid()`, so this query returns 0 until
+     * either a `swipes_received_read` policy (or a SECURITY DEFINER RPC)
+     * is added server-side. Wired end-to-end now so the UI works as soon
+     * as the policy lands.
+     */
+    suspend fun getLikesReceivedCount(userId: String): Int = withContext(Dispatchers.IO) {
+        val req = Request.Builder()
+            .url("${SupabaseConfig.REST_BASE}/swipes?swiped_id=eq.$userId&action=in.(like,superlike)&select=id")
+            .header("Prefer", "count=exact")
+            .header("Range", "0-0")
+            .get().build()
+        SupabaseClient.http.newCall(req).execute().use { resp ->
+            val range = resp.header("content-range")
+            range?.substringAfter("/")?.toIntOrNull() ?: 0
+        }
+    }
+
+    /**
+     * Fetches the profiles the given user has swiped 'like' on. Two REST
+     * calls: first the swiped_ids from `swipes`, then the matching rows
+     * from `profiles`. Photos live in the separate `profile_photos` table
+     * and are NOT fetched here (callers fall back to the default photo URL
+     * baked into `SwipeDeckProfileDto.toDatingProfile()`).
+     */
+    suspend fun getLikesSent(userId: String): List<DatingProfile> = withContext(Dispatchers.IO) {
+        // Step 1: fetch swiped_ids for likes sent
+        val idsReq = Request.Builder()
+            .url("${SupabaseConfig.REST_BASE}/swipes?swiper_id=eq.$userId&action=eq.like&select=swiped_id")
+            .get().build()
+        val ids = SupabaseClient.http.newCall(idsReq).execute().use { resp ->
+            if (!resp.isSuccessful) return@withContext emptyList()
+            val raw = resp.body?.string().orEmpty()
+            idsListAdapter.fromJson(raw).orEmpty().mapNotNull { it["swiped_id"] as? String }
+        }
+        if (ids.isEmpty()) return@withContext emptyList()
+
+        // Step 2: fetch profiles for those ids
+        val csv = ids.joinToString(",")
+        val profReq = Request.Builder()
+            .url("${SupabaseConfig.REST_BASE}/profiles?id=in.($csv)")
+            .get().build()
+        SupabaseClient.http.newCall(profReq).execute().use { resp ->
+            if (!resp.isSuccessful) emptyList()
+            else deckAdapter.fromJson(resp.body?.string().orEmpty()).orEmpty().map { it.toDatingProfile() }
+        }
     }
 
     // ---------- Matches ----------

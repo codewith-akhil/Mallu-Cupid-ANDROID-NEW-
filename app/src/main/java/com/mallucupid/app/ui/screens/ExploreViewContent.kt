@@ -32,7 +32,8 @@ data class ExploreSpaceItem(
 
 @Composable
 fun ExploreViewContent(
-    onSelectCategory: (String) -> Unit
+    onSelectCategory: (String) -> Unit,
+    categoryCounts: Map<String, Int> = emptyMap()
 ) {
     // Categories matching screenshots 19 & 20
     val spaces = listOf(
@@ -132,6 +133,8 @@ fun ExploreViewContent(
             modifier = Modifier.fillMaxSize()
         ) {
             items(spaces) { space ->
+                // Real DB count if available, else fall back to the hardcoded default.
+                val displayCount = categoryCounts[space.title] ?: space.count
                 Surface(
                     onClick = { onSelectCategory(space.title) },
                     shape = RoundedCornerShape(18.dp),
@@ -163,7 +166,7 @@ fun ExploreViewContent(
                                     color = Color.White.copy(alpha = 0.85f)
                                 ) {
                                     Text(
-                                        text = "${space.count}",
+                                        text = "$displayCount",
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = TinderTextPrimary,
