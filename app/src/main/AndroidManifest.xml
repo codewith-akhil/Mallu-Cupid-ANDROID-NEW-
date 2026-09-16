@@ -2,17 +2,48 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- ── Network ── -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- ── Location (for distance calculation in swipe deck + city auto-detect) ── -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- ── Camera (for face verification + profile photos) ── -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- ── Notifications (Android 13+ requires runtime permission) ── -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- ── Media access (Android 13+ granular media permissions) ── -->
+    <!-- Android 13+ (API 33+): READ_MEDIA_IMAGES replaces READ_EXTERNAL_STORAGE for images -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <!-- Android 14+ (API 34+): VISUAL_USER_SELECTED for partial photo access -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+
+    <!-- ── Legacy storage (Android 12 and below) ── -->
+    <!-- maxSdkVersion=32 so it doesn't apply on Android 13+ where READ_MEDIA_* is used -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29" />
+
+    <!-- ── Hardware features (all optional — app works without them) ── -->
     <uses-feature
         android:name="android.hardware.camera"
         android:required="false" />
     <uses-feature
         android:name="android.hardware.camera.front"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.location"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.location.gps"
         android:required="false" />
 
     <application
@@ -32,7 +63,6 @@
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>

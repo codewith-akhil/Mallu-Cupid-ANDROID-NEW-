@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -48,6 +49,8 @@ import com.mallucupid.app.data.OnboardingDraft
 import com.mallucupid.app.data.SampleProfiles
 import com.mallucupid.app.data.remote.SessionManager
 import com.mallucupid.app.data.remote.SupabaseRepository
+import com.mallucupid.app.notifications.MalluCupidMessagingService
+import com.mallucupid.app.permissions.rememberNotificationPermissionLauncher
 import com.mallucupid.app.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -57,9 +60,22 @@ fun DashboardScreen(
     onOpenOnboarding: () -> Unit,
     onSignOut: () -> Unit
 ) {
+    val context = LocalContext.current
     val profiles = remember { mutableStateListOf(*SampleProfiles.list.toTypedArray()) }
     val coroutineScope = rememberCoroutineScope()
     var deckLoading by remember { mutableStateOf(false) }
+
+    // Create notification channel + request POST_NOTIFICATIONS permission on first launch
+    val requestNotifications = rememberNotificationPermissionLauncher { granted ->
+        if (granted) {
+            // Channel must be created before any notification can be posted
+            MalluCupidMessagingService.createNotificationChannel(context)
+        }
+    }
+    LaunchedEffect(Unit) {
+        MalluCupidMessagingService.createNotificationChannel(context)
+        requestNotifications()
+    }
 
     // Load the real swipe deck from Supabase on first composition.
     // Shows a loading spinner while fetching. Falls back to bundled
