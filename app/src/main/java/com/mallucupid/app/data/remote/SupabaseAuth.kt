@@ -4,19 +4,16 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import com.mallucupid.app.data.remote.SupabaseClient.moshi
-import com.squareup.moshi.Types
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Supabase Auth service.
+ * Supabase Auth service — password + email OTP verification.
  *
- * Implements the custom email-OTP flow:
- *   1. sendOtp(email) → POST /functions/v1/send-otp (sends 6-digit code via Resend)
- *   2. verifyOtp(email, code) → POST /functions/v1/verify-otp → returns { token_hash }
- *   3. exchangeToken(token_hash) → POST /auth/v1/verify → returns a real session
- *
- * NEVER uses Supabase's magic-link email — the code is the only thing emailed.
+ * Flow:
+ *   SignUp:  signUp(email, password) → sendOtp(email) → verifyOtp(email, code) → signInWithPassword(email, password)
+ *   SignIn:  signInWithPassword(email, password) → session
+ *   Reset:   sendOtp(email) → verifyOtp(email, code) → resetPassword(email, newPassword)
  */
 object SupabaseAuth {
 
@@ -24,10 +21,64 @@ object SupabaseAuth {
     private val reqAdapter = moshi.adapter(Map::class.java)
     private val sendRespAdapter = moshi.adapter(SendOtpResponse::class.java)
     private val verifyRespAdapter = moshi.adapter(VerifyOtpResponse::class.java)
-    private val verifyTokenReqAdapter = moshi.adapter(VerifyTokenRequest::class.java)
     private val sessionRespAdapter = moshi.adapter(SessionResponse::class.java)
 
-    /** Returns null on success, or an error message on failure. */
+    // ── SignUp: creates a Supabase auth user (email unconfirmed) ──────────────
+
+    /** Creates a user. Returns null on success, or a user-friendly error message. */
+    suspend fun signUp(email: String, password: String): String? = withContext(Dispatchers.IO) {
+        val body = reqAdapter.toJson(mapOf("email" to email, "password" to password))
+        val req = Request.Builder()
+            .url("${SupabaseConfig.AUTH_BASE}/signup")
+            .header("apikey", SupabaseConfig.SUPABASE_ANON_KEY)
+            .post(body.toRequestBody(json))
+            .build()
+        SupabaseClient.http.newCall(req).execute().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                when {
+                    text.contains("already registered", ignoreCase = true) -> "This email is already registered. Try signing in."
+                    text.contains("weak", ignoreCase = true) -> "Password is too weak. Use at least 8 characters with a number."
+                    else -> "Could not create account. Please try again."
+                }
+            } else null
+        }
+    }
+
+    // ── SignIn: password-based login (no OTP needed) ─────────────────────────
+
+    /** Returns access_token on success, or null + user-friendly error. */
+    suspend fun signInWithPassword(email: String, password: String): Pair<String?, String?> = withContext(Dispatchers.IO) {
+        val body = reqAdapter.toJson(mapOf("email" to email, "password" to password))
+        val req = Request.Builder()
+            .url("${SupabaseConfig.AUTH_BASE}/token?grant_type=password")
+            .header("apikey", SupabaseConfig.SUPABASE_ANON_KEY)
+            .post(body.toRequestBody(json))
+            .build()
+        SupabaseClient.http.newCall(req).execute().use { resp ->
+            val text = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                when {
+                    text.contains("Invalid login", ignoreCase = true) -> null to "Invalid email or password."
+                    text.contains("Email not confirmed", ignoreCase = true) -> null to "Please verify your email first."
+                    else -> null to "Could not sign in. Please try again."
+                }
+            } else {
+                val session = sessionRespAdapter.fromJson(text)
+                if (session?.accessToken != null) {
+                    SupabaseClient.accessToken = session.accessToken
+                    SessionManager.saveSession(session)
+                    session.accessToken to null
+                } else {
+                    null to "Could not sign in. Please try again."
+                }
+            }
+        }
+    }
+
+    // ── OTP: send code via Resend SMTP ────────────────────────────────────────
+
+    /** Returns null on success, or a user-friendly error message. */
     suspend fun sendOtp(email: String): String? = withContext(Dispatchers.IO) {
         val body = reqAdapter.toJson(mapOf("email" to email))
         val req = Request.Builder()
@@ -37,13 +88,18 @@ object SupabaseAuth {
         SupabaseClient.http.newCall(req).execute().use { resp ->
             val text = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) {
-                sendRespAdapter.fromJson(text)?.error ?: "Could not send code (HTTP ${resp.code})"
+                when {
+                    text.contains("Too many", ignoreCase = true) -> "Too many attempts. Please wait a few minutes."
+                    else -> "Could not send verification code. Please try again."
+                }
             } else null
         }
     }
 
-    /** Returns the token_hash on success, or null + error on failure. */
-    suspend fun verifyOtp(email: String, code: String): Pair<String?, String?> = withContext(Dispatchers.IO) {
+    // ── OTP: verify code + confirm email ─────────────────────────────────────
+
+    /** Verifies the OTP code. Returns null on success, or a user-friendly error. */
+    suspend fun verifyOtp(email: String, code: String): String? = withContext(Dispatchers.IO) {
         val body = reqAdapter.toJson(mapOf("email" to email, "code" to code))
         val req = Request.Builder()
             .url("${SupabaseConfig.FUNCTIONS_BASE}/verify-otp")
@@ -53,40 +109,47 @@ object SupabaseAuth {
             val text = resp.body?.string().orEmpty()
             val parsed = verifyRespAdapter.fromJson(text)
             if (!resp.isSuccessful || parsed?.ok != true) {
-                null to (parsed?.error ?: "Verification failed (HTTP ${resp.code})")
-            } else {
-                parsed.token_hash to null
-            }
+                when {
+                    parsed?.error?.contains("expired", ignoreCase = true) == true -> "Code expired. Please request a new one."
+                    parsed?.error?.contains("Invalid", ignoreCase = true) == true -> "Invalid code. Please try again."
+                    parsed?.error?.contains("Too many", ignoreCase = true) == true -> "Too many attempts. Please request a new code."
+                    else -> "Verification failed. Please try again."
+                }
+            } else null
         }
     }
 
-    /** Exchanges the token_hash (from verify-otp) for a real Supabase session. */
-    suspend fun exchangeToken(tokenHash: String): Pair<SessionResponse?, String?> = withContext(Dispatchers.IO) {
-        val reqBody = verifyTokenReqAdapter.toJson(VerifyTokenRequest(tokenHash))
+    // ── Reset Password: update password after OTP verification ───────────────
+
+    /** Resets the user's password. Returns null on success, or a user-friendly error. */
+    suspend fun resetPassword(email: String, newPassword: String): String? = withContext(Dispatchers.IO) {
+        val body = reqAdapter.toJson(mapOf("email" to email, "new_password" to newPassword))
         val req = Request.Builder()
-            .url("${SupabaseConfig.AUTH_BASE}/verify")
-            .post(reqBody.toRequestBody(json))
+            .url("${SupabaseConfig.FUNCTIONS_BASE}/reset-password")
+            .post(body.toRequestBody(json))
             .build()
         SupabaseClient.http.newCall(req).execute().use { resp ->
             val text = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) {
-                null to "Session start failed (HTTP ${resp.code}): ${text.take(200)}"
-            } else {
-                sessionRespAdapter.fromJson(text) to null
-            }
+                "Could not update password. Please try again."
+            } else null
         }
     }
 
-    /** Full flow: verify OTP + exchange for session. Returns access_token on success. */
-    suspend fun signInWithOtp(email: String, code: String): Pair<String?, String?> {
-        val (tokenHash, err) = verifyOtp(email, code)
-        if (err != null || tokenHash == null) return null to err
-        val (session, sessionErr) = exchangeToken(tokenHash)
-        if (sessionErr != null || session?.accessToken == null) {
-            return null to (sessionErr ?: "No access token in session response")
-        }
-        SupabaseClient.accessToken = session.accessToken
-        SessionManager.saveSession(session)
-        return session.accessToken to null
+    // ── Password validation rules ─────────────────────────────────────────────
+
+    /** Returns a list of unmet password requirements (empty = valid). */
+    fun validatePassword(password: String): List<PasswordRule> {
+        val rules = mutableListOf<PasswordRule>()
+        rules.add(PasswordRule("At least 8 characters", password.length >= 8))
+        rules.add(PasswordRule("At most 128 characters", password.length <= 128))
+        rules.add(PasswordRule("At least 1 uppercase letter", password.any { it.isUpperCase() }))
+        rules.add(PasswordRule("At least 1 number", password.any { it.isDigit() }))
+        return rules
     }
+
+    /** Returns true if all password rules pass. */
+    fun isPasswordValid(password: String): Boolean = validatePassword(password).all { it.passed }
 }
+
+data class PasswordRule(val label: String, val passed: Boolean)

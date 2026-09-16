@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
@@ -26,11 +27,12 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.mallucupid.app.data.remote.SupabaseAuth
 import com.mallucupid.app.ui.theme.*
 
 @Composable
 fun SignInScreen(
-    onSignIn: (String) -> Unit,
+    onSignIn: (String, String) -> Unit,
     onGoToSignUp: () -> Unit,
     onForgotPassword: () -> Unit
 ) {
@@ -40,8 +42,13 @@ fun SignInScreen(
     var emailErrorText by remember { mutableStateOf<String?>(null) }
     var passwordError by remember { mutableStateOf(false) }
     var passwordErrorText by remember { mutableStateOf<String?>(null) }
+    var loading by remember { mutableStateOf(false) }
 
     AuthBackground {
+        if (loading) {
+            LoadingOverlay(message = "Signing in...")
+        }
+
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val isCompact = maxHeight < 620.dp
             val scrollState = rememberScrollState()
@@ -81,7 +88,7 @@ fun SignInScreen(
 
                 AuthTextField(
                     value = email,
-                    onValueChange = {
+                    onValueChange = { if (loading) loading = false
                         email = it
                         if (emailError) {
                             emailError = false
@@ -98,7 +105,7 @@ fun SignInScreen(
 
                 AuthTextField(
                     value = password,
-                    onValueChange = {
+                    onValueChange = { if (loading) loading = false
                         password = it
                         if (passwordError) {
                             passwordError = false
@@ -134,12 +141,20 @@ fun SignInScreen(
                 AuthButton(
                     text = "Sign In",
                     onClick = {
-                        emailError = email.isNotEmpty() && !isValidEmail(email)
-                        emailErrorText = if (emailError) "Enter a valid email address" else null
+                        emailError = email.isEmpty() || !isValidEmail(email)
+                        emailErrorText = when {
+                            email.isEmpty() -> "Email is required"
+                            !isValidEmail(email) -> "Enter a valid email address"
+                            else -> null
+                        }
                         passwordError = password.length < 6
                         passwordErrorText = if (passwordError) "Minimum 6 characters" else null
-                        if (!emailError && !passwordError) onSignIn(email)
+                        if (!emailError && !passwordError) {
+                            loading = true
+                            onSignIn(email, password)
+                        }
                     },
+                    enabled = !loading,
                     height = if (isCompact) 50.dp else 56.dp
                 )
 
@@ -172,7 +187,7 @@ fun SignInScreen(
 
 @Composable
 fun SignUpScreen(
-    onContinue: (String) -> Unit,
+    onContinue: (String, String, String) -> Unit,
     onGoToSignIn: () -> Unit
 ) {
     var name by remember { mutableStateOf("") }
@@ -183,8 +198,13 @@ fun SignUpScreen(
     var emailErrorText by remember { mutableStateOf<String?>(null) }
     var passwordError by remember { mutableStateOf(false) }
     var passwordErrorText by remember { mutableStateOf<String?>(null) }
+    var loading by remember { mutableStateOf(false) }
 
     AuthBackground {
+        if (loading) {
+            LoadingOverlay(message = "Creating account...")
+        }
+
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val isCompact = maxHeight < 640.dp
             val scrollState = rememberScrollState()
@@ -224,9 +244,11 @@ fun SignUpScreen(
 
                 AuthTextField(
                     value = name,
-                    onValueChange = {
-                        name = it
-                        if (nameError) nameError = false
+                    onValueChange = { if (loading) loading = false
+                        if (it.length <= 50) {
+                            name = it
+                            if (nameError) nameError = false
+                        }
                     },
                     placeholder = "Full Name",
                     isError = nameError,
@@ -237,7 +259,7 @@ fun SignUpScreen(
 
                 AuthTextField(
                     value = email,
-                    onValueChange = {
+                    onValueChange = { if (loading) loading = false
                         email = it
                         if (emailError) {
                             emailError = false
@@ -254,7 +276,7 @@ fun SignUpScreen(
 
                 AuthTextField(
                     value = password,
-                    onValueChange = {
+                    onValueChange = { if (loading) loading = false
                         password = it
                         if (passwordError) {
                             passwordError = false
@@ -263,10 +285,46 @@ fun SignUpScreen(
                     },
                     placeholder = "Password",
                     isPassword = true,
-                    showStrength = true,
                     isError = passwordError,
                     errorText = passwordErrorText
                 )
+
+                // Password validation checklist — shown only when password is non-empty.
+                // Uses SupabaseAuth.validatePassword to drive the 4 rule rows; each row
+                // turns green ✓ when its rule passes, gray otherwise.
+                if (password.isNotEmpty()) {
+                    val rules = SupabaseAuth.validatePassword(password).associateBy { it.label }
+                    val orderedLabels = listOf(
+                        "At least 8 characters",
+                        "At least 1 uppercase letter",
+                        "At least 1 number",
+                        "At most 128 characters"
+                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        orderedLabels.forEach { label ->
+                            val passed = rules[label]?.passed == true
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = null,
+                                    tint = if (passed) TinderGreen else Color.White.copy(alpha = 0.35f),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = label,
+                                    color = if (passed) TinderGreen else Color.White.copy(alpha = 0.5f),
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(if (isCompact) 12.dp else 24.dp))
 
@@ -276,10 +334,15 @@ fun SignUpScreen(
                         nameError = name.isBlank()
                         emailError = !isValidEmail(email)
                         emailErrorText = if (emailError) "Enter a valid email address" else null
-                        passwordError = password.length < 6
-                        passwordErrorText = if (passwordError) "Minimum 6 characters" else null
-                        if (!nameError && !emailError && !passwordError) onContinue(email)
+                        val passwordValid = SupabaseAuth.isPasswordValid(password)
+                        passwordError = !passwordValid
+                        passwordErrorText = if (passwordError) "Please meet all password requirements" else null
+                        if (!nameError && !emailError && !passwordError) {
+                            loading = true
+                            onContinue(name, email, password)
+                        }
                     },
+                    enabled = !loading,
                     height = if (isCompact) 50.dp else 56.dp
                 )
 
@@ -355,7 +418,7 @@ fun AuthTextField(
     placeholder: String,
     keyboardType: KeyboardType = KeyboardType.Text,
     isPassword: Boolean = false,
-    showStrength: Boolean = false,
+    showStrength: Boolean = false, // kept for backward-compat with OtpAndResetScreens; no-op (strength meter replaced by per-screen checklist UI).
     isError: Boolean = false,
     errorText: String? = null
 ) {
@@ -398,34 +461,6 @@ fun AuthTextField(
             } else null
         )
 
-        if (showStrength && isPassword && value.isNotEmpty()) {
-            val strength = passwordStrength(value)
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                repeat(4) { i ->
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(3.dp)
-                            .clip(RoundedCornerShape(2.dp))
-                            .background(
-                                if (i < strength.segments) strength.color
-                                else Color.White.copy(alpha = 0.2f)
-                            )
-                    )
-                }
-                Text(
-                    text = strength.label,
-                    color = strength.color,
-                    fontSize = 11.sp
-                )
-            }
-        }
-
         if (isError && !errorText.isNullOrEmpty()) {
             Spacer(modifier = Modifier.height(6.dp))
             Text(
@@ -437,19 +472,6 @@ fun AuthTextField(
     }
 }
 
-/**
- * Strength tier for a password string, based on character length.
- * <6 chars = Weak, 6-8 = Fair, 9-11 = Good, 12+ = Strong.
- */
-private data class PasswordStrength(val segments: Int, val label: String, val color: Color)
-
-private fun passwordStrength(password: String): PasswordStrength = when {
-    password.length < 6 -> PasswordStrength(1, "Weak", NopeCoral)
-    password.length <= 8 -> PasswordStrength(2, "Fair", TinderGold)
-    password.length <= 11 -> PasswordStrength(3, "Good", TinderGreen)
-    else -> PasswordStrength(4, "Strong", SuperBlue)
-}
-
 private val emailRegex = Regex("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\$")
 
 private fun isValidEmail(email: String): Boolean = emailRegex.matches(email)
@@ -459,15 +481,20 @@ fun AuthButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
     height: Dp = 56.dp
 ) {
     Button(
         onClick = onClick,
+        enabled = enabled,
         modifier = modifier
             .fillMaxWidth()
             .height(height),
         shape = RoundedCornerShape(50),
-        colors = ButtonDefaults.buttonColors(containerColor = AccentPink),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = AccentPink,
+            disabledContainerColor = AccentPink.copy(alpha = 0.4f)
+        ),
         elevation = ButtonDefaults.buttonElevation(defaultElevation = 8.dp)
     ) {
         Text(
@@ -476,5 +503,21 @@ fun AuthButton(
             fontWeight = FontWeight.SemiBold,
             color = Color.White
         )
+    }
+}
+
+@Composable
+private fun LoadingOverlay(message: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.75f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            CircularProgressIndicator(color = AccentPink)
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(text = message, color = Color.White)
+        }
     }
 }
