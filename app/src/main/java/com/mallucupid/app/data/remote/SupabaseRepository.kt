@@ -372,6 +372,34 @@ object SupabaseRepository {
         SupabaseClient.http.newCall(req).execute().use { it.isSuccessful }
     }
 
+    // ---------- Blocked users ----------
+
+    /** Unblocks a user. Returns null on success, or error. */
+    suspend fun unblockUser(blockerId: String, blockedId: String): String? = withContext(Dispatchers.IO) {
+        val req = Request.Builder()
+            .url("${SupabaseConfig.REST_BASE}/blocked_users?blocker_id=eq.$blockerId&blocked_id=eq.$blockedId")
+            .header("Prefer", "return=minimal")
+            .delete()
+            .build()
+        SupabaseClient.http.newCall(req).execute().use { resp ->
+            if (resp.isSuccessful) null else "Could not unblock user. Please try again."
+        }
+    }
+
+    // ---------- Account deletion ----------
+
+    /** Deletes the user's account via edge function. Returns null on success, or error. */
+    suspend fun deleteAccount(userId: String): String? = withContext(Dispatchers.IO) {
+        val body = reqAdapter.toJson(mapOf("user_id" to userId))
+        val req = Request.Builder()
+            .url("${SupabaseConfig.FUNCTIONS_BASE}/delete-account")
+            .post(body.toRequestBody(json))
+            .build()
+        SupabaseClient.http.newCall(req).execute().use { resp ->
+            if (resp.isSuccessful) null else "Could not delete account. Please try again or contact support."
+        }
+    }
+
     // ---------- DTO → domain mapping ----------
 
     private fun SwipeDeckProfileDto.toDatingProfile(): DatingProfile {

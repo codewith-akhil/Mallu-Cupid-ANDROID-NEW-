@@ -39,6 +39,8 @@ import com.mallucupid.app.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.CircularProgressIndicator
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,6 +58,10 @@ fun AccountSettingsScreen(
     // Sub-screen navigation states
     var currentSubView by remember { mutableStateOf("MAIN") } // "MAIN", "BLOCKED_USERS", "DELETE_ACCOUNT", "ACTIVE_STATUS", "EMAIL_SETTINGS", "PUSH_NOTIFICATIONS", "FACE_VERIFICATION"
     var userToUnblock by remember { mutableStateOf<BlockedUser?>(null) }
+
+    // ---- Action loading states ----
+    var unblockLoading by remember { mutableStateOf(false) }
+    var deleteLoading by remember { mutableStateOf(false) }
 
     // ---- Settings persistence state (MAIN view only) ----
     val sessionUserId = remember { SessionManager.current()?.userId }
@@ -186,18 +192,41 @@ fun AccountSettingsScreen(
                     confirmButton = {
                         Button(
                             onClick = {
-                                val updatedBlocked = draft.blockedUsers.filter { it.id != targetUser.id }
-                                draft = draft.copy(blockedUsers = updatedBlocked)
-                                Toast.makeText(context, "${targetUser.name} has been unblocked", Toast.LENGTH_SHORT).show()
-                                userToUnblock = null
+                                if (!unblockLoading) {
+                                    unblockLoading = true
+                                    coroutineScope.launch {
+                                        val uid = SessionManager.current()?.userId
+                                        val err = if (uid != null) {
+                                            SupabaseRepository.unblockUser(uid, targetUser.id)
+                                        } else "Not signed in"
+                                        unblockLoading = false
+                                        if (err != null) {
+                                            Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            val updatedBlocked = draft.blockedUsers.filter { it.id != targetUser.id }
+                                            draft = draft.copy(blockedUsers = updatedBlocked)
+                                            Toast.makeText(context, "${targetUser.name} has been unblocked", Toast.LENGTH_SHORT).show()
+                                        }
+                                        userToUnblock = null
+                                    }
+                                }
                             },
+                            enabled = !unblockLoading,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = DashboardTerracotta,
                                 contentColor = Color.White
                             ),
                             shape = RoundedCornerShape(10.dp)
                         ) {
-                            Text("Unblock", fontWeight = FontWeight.Bold)
+                            if (unblockLoading) {
+                                CircularProgressIndicator(
+                                    color = Color.White,
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Text("Unblock", fontWeight = FontWeight.Bold)
+                            }
                         }
                     },
                     dismissButton = {
@@ -212,9 +241,25 @@ fun AccountSettingsScreen(
         "DELETE_ACCOUNT" -> {
             DeleteAccountScreen(
                 onConfirmDelete = { reason ->
-                    Toast.makeText(context, "Account deleted: $reason", Toast.LENGTH_LONG).show()
-                    onAccountDeleted()
+                    if (!deleteLoading) {
+                        deleteLoading = true
+                        coroutineScope.launch {
+                            val uid = SessionManager.current()?.userId
+                            val err = if (uid != null) {
+                                SupabaseRepository.deleteAccount(uid)
+                            } else "Not signed in"
+                            deleteLoading = false
+                            if (err != null) {
+                                Toast.makeText(context, err, Toast.LENGTH_LONG).show()
+                            } else {
+                                Toast.makeText(context, "Your account has been deleted.", Toast.LENGTH_LONG).show()
+                                SessionManager.signOut()
+                                onAccountDeleted()
+                            }
+                        }
+                    }
                 },
+                deleteLoading = deleteLoading,
                 onBack = { currentSubView = "MAIN" }
             )
         }
@@ -1272,6 +1317,7 @@ fun BlockedUsersScreen(
 @Composable
 fun DeleteAccountScreen(
     onConfirmDelete: (reason: String) -> Unit,
+    deleteLoading: Boolean = false,
     onBack: () -> Unit
 ) {
     var selectedReason by remember { mutableStateOf("Found someone special on Mallu Cupid") }
@@ -1522,17 +1568,28 @@ fun DeleteAccountScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        showFinalConfirmDialog = false
-                        val finalReason = if (additionalNotes.isNotBlank()) "$selectedReason - $additionalNotes" else selectedReason
-                        onConfirmDelete(finalReason)
+                        if (!deleteLoading) {
+                            showFinalConfirmDialog = false
+                            val finalReason = if (additionalNotes.isNotBlank()) "$selectedReason - $additionalNotes" else selectedReason
+                            onConfirmDelete(finalReason)
+                        }
                     },
+                    enabled = !deleteLoading,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = NopeCoral,
                         contentColor = Color.White
                     ),
                     shape = RoundedCornerShape(10.dp)
                 ) {
-                    Text("Yes, Delete Profile", fontWeight = FontWeight.Bold)
+                    if (deleteLoading) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text("Yes, Delete Profile", fontWeight = FontWeight.Bold)
+                    }
                 }
             },
             dismissButton = {
