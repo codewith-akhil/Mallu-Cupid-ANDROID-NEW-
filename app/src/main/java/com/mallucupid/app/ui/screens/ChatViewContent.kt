@@ -3,7 +3,10 @@ package com.mallucupid.app.ui.screens
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.media.MediaRecorder
 import android.net.Uri
+import android.os.Build
+import android.util.Base64
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -49,13 +52,26 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import coil.compose.AsyncImage
 import com.mallucupid.app.data.DatingProfile
+import com.mallucupid.app.data.remote.MatchDto
 import com.mallucupid.app.data.remote.MessageDto
 import com.mallucupid.app.data.remote.SessionManager
+import com.mallucupid.app.data.remote.SupabaseClient
+import com.mallucupid.app.data.remote.SupabaseConfig
 import com.mallucupid.app.data.remote.SupabaseRepository
 import com.mallucupid.app.ui.theme.*
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.util.concurrent.TimeUnit
 
 private fun Context.findActivity(): Activity? {
     var ctx = this
@@ -197,6 +213,42 @@ private fun ChatMessageType.toSupabaseType(): String = when (this) {
 }
 
 /**
+ * Fix 1 — Supabase Realtime WebSocket URL builder.
+ *
+ * Builds the `wss://` (or `ws://` for plain-http dev projects) URL for the
+ * Supabase Realtime v1 websocket endpoint. The anon key is appended as the
+ * `apikey` query param — RLS policies still apply on every broadcast event.
+ */
+private fun buildRealtimeWebSocketUrl(): String {
+    val base = SupabaseConfig.SUPABASE_URL
+    val secure = base.startsWith("https://")
+    val host = base.removePrefix("https://").removePrefix("http://").trimEnd('/')
+    val scheme = if (secure) "wss://" else "ws://"
+    return "$scheme$host/realtime/v1/websocket?apikey=${SupabaseConfig.SUPABASE_ANON_KEY}&vsn=1.0.0"
+}
+
+/**
+ * Fix 1 — Singleton OkHttp client dedicated to the Realtime websocket.
+ *
+ * Built fresh (separate from `SupabaseClient.http`) so that the 15s ping
+ * interval and 30s read timeout don't bleed into the REST client's behaviour.
+ * `pingInterval` is required for Supabase Realtime — without it the server
+ * closes the socket after ~60s of inactivity.
+ */
+private val realtimeHttpClient: OkHttpClient by lazy {
+    OkHttpClient.Builder()
+        .pingInterval(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .build()
+}
+
+/** Moshi adapter for parsing incoming Realtime `record` payloads into [MessageDto]. */
+private val realtimeMessageAdapter: com.squareup.moshi.JsonAdapter<MessageDto> by lazy {
+    SupabaseClient.moshi.adapter(MessageDto::class.java)
+}
+
+/**
  * Chat tray shimmer row — pulsing placeholder used while the matches list is
  * being fetched from Supabase. Reuses DashboardCard / DashboardNavMuted tokens
  * so no new colours are introduced.
@@ -276,42 +328,47 @@ fun ChatViewContent(
     var showGifPickerSheet by remember { mutableStateOf(false) }
     var previewMediaUrl by remember { mutableStateOf<Pair<String, Boolean>?>(null) } // url, isVideo
 
-    // Feature #19 — Partner typing indicator state.
+    // Feature #19 — Partner typing indicator state. Now driven only by Realtime
+    // broadcast events from the partner (the canned 1.5s-delay + hardcoded reply
+    // simulation has been removed — see Fix 1).
     var partnerIsTyping by remember { mutableStateOf(false) }
-    // Feature #22 — rememberCoroutineScope used for typing simulation + read-receipt update.
+    // Feature #22 — rememberCoroutineScope used for read-receipt updates + Realtime handlers.
     val chatScope = rememberCoroutineScope()
     // Feature #24 — Currently selected message being replied to (quoted preview above input).
     var replyTarget by remember { mutableStateOf<ChatMessageItem?>(null) }
-    // Feature #25 — Voice recording UI state. Simulated timer (no MediaRecorder dependency).
+    // Fix 6 — Voice recording UI state. `voiceRecordSeconds` is now derived from
+    // the real MediaRecorder start time (updated every 250ms by a LaunchedEffect
+    // while `isRecordingVoice` is true).
     var isRecordingVoice by remember { mutableStateOf(false) }
     var voiceRecordSeconds by remember { mutableIntStateOf(0) }
+    // Fix 6 — Holds the active MediaRecorder + the cache file it writes to.
+    // Cleared on stop / cancel. Lives in `remember` so it survives recomposition
+    // but never leaks past the conversation scope.
+    var mediaRecorderRef by remember { mutableStateOf<MediaRecorder?>(null) }
+    var voiceRecordingFile by remember { mutableStateOf<File?>(null) }
+    // Fix 6 — Wall-clock ms at which the current recording started. Drives the
+    // on-screen timer; reset to 0 on stop / cancel.
+    var recorderStartMs by remember { mutableLongStateOf(0L) }
+    // Fix 7 — One-shot send guard. Disables the send button while a message is
+    // being persisted to Supabase. Prevents double-send on rapid taps.
+    var isSendingMessage by remember { mutableStateOf(false) }
     // Feature #27 — Chat tray tab: 0 = Matches, 1 = Requests
     var chatTrayTab by remember { mutableIntStateOf(0) }
     // Block confirmation dialog state (stores the profile ID to block, or null when dismissed)
     var showBlockConfirm by remember { mutableStateOf<String?>(null) }
-    // Feature #27 — Mutable sample message requests list (Accept moves to Matches, Block removes).
-    val sampleRequests = remember {
-        mutableStateListOf(
-            ChatThreadItem(
-                profile = profiles.getOrElse(4) { profiles.first() },
-                lastMessage = "Sent you a message request",
-                timestamp = "2h",
-                isUnread = true
-            ),
-            ChatThreadItem(
-                profile = profiles.getOrElse(5) { profiles.first() },
-                lastMessage = "Wants to connect with you",
-                timestamp = "5h",
-                isUnread = true
-            ),
-            ChatThreadItem(
-                profile = profiles.getOrElse(6) { profiles.first() },
-                lastMessage = "Liked your profile!",
-                timestamp = "1d",
-                isUnread = true
-            )
-        )
-    }
+    // Fix 4 — Real message-requests list. Populated from
+    // SupabaseRepository.getLikesReceivedProfiles(uid) on first composition of
+    // the chat tray. Replaces the deleted `sampleRequests` hardcoded list.
+    val realRequests = remember { mutableStateListOf<ChatThreadItem>() }
+    var requestsLoading by remember { mutableStateOf(true) }
+    // Fix 2 — Real chat tray threads. Each entry is built from a real MatchDto
+    // + the partner's profile (looked up via getProfilesByIds) + the most
+    // recent message in that match (last row of getMessages). Replaces the
+    // deleted `sampleThreads` hardcoded list.
+    val realThreads = remember { mutableStateListOf<ChatThreadItem>() }
+    // Fix 2 — The raw MatchDto rows for the current user (used by the "New
+    // Matches" carousel too). Populated alongside `realThreads`.
+    val realMatches = remember { mutableStateListOf<MatchDto>() }
 
     // Initial message history with mixed text, image, and video
     val conversationMessages = remember {
@@ -386,23 +443,77 @@ fun ChatViewContent(
     // list from Supabase. Renders shimmer placeholder rows in the Messages list.
     var chatTrayLoading by remember { mutableStateOf(true) }
 
-    // Chat-Wiring — Fetch the user's matches list once when the chat tray is
-    // first shown. We don't render real match rows yet (would require per-match
-    // partner-profile fetches, out of scope for this task), but the call
-    // validates API reachability and gives the shimmer a real network window.
-    // The existing sample thread list remains the rendered fallback.
+    // Fix 2 + Fix 4 — Fetch the user's matches + inbound likes once when the
+    // chat tray is first shown. Populates `realMatches` / `realThreads` (for
+    // the Messages tab) and `realRequests` (for the Requests tab) from real
+    // Supabase rows. Falls back to shimmer + empty states on any failure.
     LaunchedEffect(Unit) {
         val uid = SessionManager.current()?.userId
         if (uid != null) {
-            runCatching { SupabaseRepository.getMatches(uid) }
+            // --- Matches → realThreads + realMatches ---
+            val matches = runCatching { SupabaseRepository.getMatches(uid) }
+                .getOrDefault(emptyList())
+            realMatches.clear()
+            realMatches.addAll(matches)
+            if (matches.isNotEmpty()) {
+                // Resolve partner IDs (the one that isn't uid) and fetch profiles.
+                val partnerIds = matches.map { m ->
+                    if (m.user1Id == uid) m.user2Id else m.user1Id
+                }.distinct()
+                val partnerProfiles = runCatching {
+                    SupabaseRepository.getProfilesByIds(partnerIds)
+                }.getOrDefault(emptyList())
+                val profileById = partnerProfiles.associateBy { it.id }
+                // For each match, fetch the last message (just the last row, ordered desc → asc limit 1).
+                realThreads.clear()
+                matches.forEach { m ->
+                    val partnerProfile = profileById[if (m.user1Id == uid) m.user2Id else m.user1Id]
+                    val lastMsgs = runCatching { SupabaseRepository.getMessages(m.id) }
+                        .getOrDefault(emptyList())
+                    val last = lastMsgs.lastOrNull()
+                    if (partnerProfile != null) {
+                        realThreads.add(
+                            ChatThreadItem(
+                                profile = partnerProfile,
+                                lastMessage = last?.content?.takeIf { it.isNotBlank() }
+                                    ?: last?.let { if (it.type == "image") "Sent a photo 📷" else if (it.type == "video") "Sent a video 🎥" else if (it.type == "voice") "Sent a voice message 🎤" else "Say hi! 👋" }
+                                    ?: "Say hi! 👋",
+                                timestamp = last?.createdAt?.let { formatSupabaseTimestamp(it).substringAfter(", ").ifBlank { "Just now" } }
+                                    ?: "New",
+                                isUnread = last != null && last.senderId != uid && !last.isRead,
+                                isYourTurn = last != null && last.senderId != uid
+                            )
+                        )
+                    }
+                }
+            }
+            // --- Inbound likes → realRequests ---
+            val likedByProfiles = runCatching {
+                SupabaseRepository.getLikesReceivedProfiles(uid)
+            }.getOrDefault(emptyList())
+            realRequests.clear()
+            realRequests.addAll(
+                likedByProfiles.map { profile ->
+                    ChatThreadItem(
+                        profile = profile,
+                        lastMessage = "Liked your profile!",
+                        timestamp = "New",
+                        isUnread = true
+                    )
+                }
+            )
+            requestsLoading = false
+        } else {
+            requestsLoading = false
         }
         chatTrayLoading = false
     }
 
     // Chat-Wiring — Whenever the open partner changes, resolve the matchId for
     // (current_user, partner) and load the real message history. Falls back to
-    // the canned sample messages on any failure or empty result so the chat
-    // still works in dev (per task spec).
+    // the canned sample messages only when no match row exists (dev mode) — when
+    // a real matchId resolves, the conversation list reflects the real DB
+    // history (which may legitimately be empty for a brand-new match).
     LaunchedEffect(activeChatProfile?.id) {
         val partner = activeChatProfile ?: return@LaunchedEffect
         conversationLoading = true
@@ -430,20 +541,22 @@ fun ChatViewContent(
         val msgs = runCatching {
             SupabaseRepository.getMessages(matchId)
         }.getOrDefault(emptyList())
-        if (msgs.isEmpty()) {
-            // Empty history — fall back to the canned sample conversation so
-            // the screen is not blank in dev / pre-seed environments.
-            conversationMessages.clear()
-            conversationMessages.addAll(sampleMessagesFallback)
-            conversationLoading = false
-            return@LaunchedEffect
-        }
-        // Replace local list with real Supabase messages.
+        // Replace local list with real Supabase messages (even if empty for a
+        // brand-new match — production shows an empty conversation, not canned).
         conversationMessages.clear()
         msgs.forEach { dto ->
             conversationMessages.add(dto.toChatMessageItem(uid))
         }
         conversationLoading = false
+
+        // Fix 3 — Read receipts. Mark every received (sender_id != me) message
+        // that is currently unread as read now that the user has opened this
+        // conversation. Best-effort: failures are swallowed (the local list
+        // still renders correctly without the read flag being flipped).
+        msgs.filter { it.senderId != uid && !it.isRead && it.id != null }
+            .forEach { dto ->
+                runCatching { SupabaseRepository.markMessageRead(dto.id!!) }
+            }
     }
 
     // Android Photo & Video Picker launcher
@@ -514,6 +627,112 @@ fun ChatViewContent(
         }
     }
 
+    // Fix 6 — Starts a real MediaRecorder session writing AAC audio to a cache
+    // file. Sets `mediaRecorderRef`, `voiceRecordingFile`, `recorderStartMs`,
+    // and flips `isRecordingVoice = true` so the timer LaunchedEffect kicks in.
+    // Safe to call from the long-press handler; re-entrant guard via `isRecordingVoice`.
+    fun startVoiceRecording() {
+        if (isRecordingVoice) return
+        try {
+            val cacheDir = context.cacheDir
+            val audioFile = File(cacheDir, "voice_msg_${System.currentTimeMillis()}.m4a")
+            val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                MediaRecorder(context)
+            } else {
+                @Suppress("DEPRECATION")
+                MediaRecorder()
+            }
+            recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
+            recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            recorder.setAudioEncodingBitRate(128_000)
+            recorder.setAudioSamplingRate(44_100)
+            recorder.setOutputFile(audioFile.absolutePath)
+            recorder.prepare()
+            recorder.start()
+            mediaRecorderRef = recorder
+            voiceRecordingFile = audioFile
+            recorderStartMs = System.currentTimeMillis()
+            voiceRecordSeconds = 0
+            isRecordingVoice = true
+        } catch (t: Throwable) {
+            Toast.makeText(
+                context,
+                "Couldn't start voice recording: ${t.message ?: "unknown error"}",
+                Toast.LENGTH_LONG
+            ).show()
+            runCatching { mediaRecorderRef?.stop() }
+            runCatching { mediaRecorderRef?.release() }
+            mediaRecorderRef = null
+            voiceRecordingFile = null
+            recorderStartMs = 0L
+            voiceRecordSeconds = 0
+            isRecordingVoice = false
+        }
+    }
+
+    // Fix 6 — Stops the active MediaRecorder and returns the recorded audio
+    // bytes (or null on any failure). Always clears the recorder ref + file ref.
+    fun stopVoiceRecording(): ByteArray? {
+        val recorder = mediaRecorderRef ?: return null
+        val file = voiceRecordingFile
+        var bytes: ByteArray? = null
+        try {
+            recorder.stop()
+            if (file != null && file.exists()) {
+                bytes = file.readBytes()
+            }
+        } catch (_: Throwable) {
+            // stop() throws if the recorder didn't actually record any audio
+            // (e.g. user released instantly). Treat as cancel.
+            bytes = null
+        } finally {
+            try { recorder.release() } catch (_: Throwable) {}
+            mediaRecorderRef = null
+            voiceRecordingFile = null
+            recorderStartMs = 0L
+            voiceRecordSeconds = 0
+            isRecordingVoice = false
+            file?.let { runCatching { it.delete() } }
+        }
+        return bytes
+    }
+
+    // Fix 6 — Cancels the active recording without returning any bytes.
+    fun cancelVoiceRecording() {
+        val recorder = mediaRecorderRef ?: run {
+            isRecordingVoice = false
+            voiceRecordSeconds = 0
+            recorderStartMs = 0L
+            return
+        }
+        try { recorder.stop() } catch (_: Throwable) {}
+        try { recorder.release() } catch (_: Throwable) {}
+        voiceRecordingFile?.let { runCatching { it.delete() } }
+        mediaRecorderRef = null
+        voiceRecordingFile = null
+        recorderStartMs = 0L
+        voiceRecordSeconds = 0
+        isRecordingVoice = false
+    }
+
+    // Fix 6 — RECORD_AUDIO runtime-permission launcher. Launched before
+    // starting a MediaRecorder session. On grant: calls `startVoiceRecording()`.
+    // On deny: shows a Toast and bails (no recording started).
+    val recordAudioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            startVoiceRecording()
+        } else {
+            Toast.makeText(
+                context,
+                "Microphone permission denied — can't record voice messages",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
     // Feature #21 — Helper: parse the day label from a message timestamp.
     // Supports "Friday 28 Aug, 15:00", "Wednesday 10:15", "Just now".
     fun dayLabelFromTimestamp(ts: String): String {
@@ -557,16 +776,22 @@ fun ChatViewContent(
         }
     }
 
-    // Feature #25 — Simulated voice recording timer. Counts up while isRecordingVoice is true.
+    // Fix 6 — Real recording timer. Derives elapsed seconds from the actual
+    // MediaRecorder start time (kept in `recorderStartMs`). Ticks every 250ms
+    // while `isRecordingVoice` is true so the UI feels live. Hard-caps at 30s
+    // (auto-stops the recorder + sets `isRecordingVoice = false`).
     LaunchedEffect(isRecordingVoice) {
         while (isRecordingVoice) {
-            delay(1000L)
-            if (voiceRecordSeconds < 30) {
-                voiceRecordSeconds = voiceRecordSeconds + 1
-            } else {
-                // Hard cap at 30s — auto-stop.
+            val elapsedMs = System.currentTimeMillis() - recorderStartMs
+            val secs = (elapsedMs / 1000L).toInt()
+            if (secs >= 30) {
+                // Hard cap at 30s — auto-stop (recorder is torn down by the
+                // stop handler the user invokes; here we just flip the flag).
                 isRecordingVoice = false
+                break
             }
+            voiceRecordSeconds = secs
+            delay(250L)
         }
     }
 
@@ -591,6 +816,175 @@ fun ChatViewContent(
             )
             onDispose {
                 activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            }
+        }
+
+        // =========================================================================
+        // Fix 1 — Supabase Realtime subscription on the `messages` table.
+        //
+        // Opens a websocket to Supabase Realtime v1, joins the
+        // `realtime:public:messages` channel filtered by `match_id=eq.{matchId}`,
+        // and appends / updates messages in `conversationMessages` on every
+        // INSERT / UPDATE event. The websocket is closed in `onDispose` when
+        // the conversation exits (or when matchId changes).
+        //
+        // Polling fallback: regardless of websocket status, a separate
+        // LaunchedEffect below polls `getMessages(matchId)` every 5s while the
+        // conversation is open — this ensures messages always arrive even if
+        // Realtime fails (e.g. network proxy blocks websockets).
+        // =========================================================================
+        DisposableEffect(activeMatchId) {
+            val matchId = activeMatchId
+            val uid = SessionManager.current()?.userId
+            if (matchId == null || uid == null) {
+                onDispose { /* nothing to clean up — no websocket was opened */ }
+            } else {
+                val topic = "realtime:public:messages:match_id=eq.$matchId"
+                val req = Request.Builder()
+                    .url(buildRealtimeWebSocketUrl())
+                    .build()
+                val wsListener = object : WebSocketListener() {
+                    override fun onOpen(webSocket: WebSocket, response: Response) {
+                        // Phoenix channels join — sends a `phx_join` event with the
+                        // postgres_changes config so Supabase knows to broadcast
+                        // INSERT / UPDATE events for the messages table on this channel.
+                        val joinPayload = JSONObject().apply {
+                            put("config", JSONObject().apply {
+                                put("broadcast", JSONObject().apply {
+                                    put("ack", false)
+                                    put("self", false)
+                                })
+                                put("presence", JSONObject().apply {
+                                    put("key", "")
+                                })
+                                put("postgres_changes", JSONArray().apply {
+                                    put(JSONObject().apply {
+                                        put("event", "*")
+                                        put("schema", "public")
+                                        put("table", "messages")
+                                        put("filter", "match_id=eq.$matchId")
+                                    })
+                                })
+                            })
+                        }
+                        val joinMsg = JSONObject().apply {
+                            put("topic", topic)
+                            put("event", "phx_join")
+                            put("payload", joinPayload)
+                            put("ref", "1")
+                        }
+                        webSocket.send(joinMsg.toString())
+                    }
+
+                    override fun onMessage(webSocket: WebSocket, text: String) {
+                        try {
+                            val root = JSONObject(text)
+                            val event = root.optString("event")
+                            if (event != "postgres_changes") return
+                            val payloadData = root.optJSONObject("payload") ?: return
+                            val data = payloadData.optJSONObject("data") ?: return
+                            val type = data.optString("type")
+                            val record = data.optJSONObject("record") ?: return
+                            val dto = realtimeMessageAdapter.fromJson(record.toString()) ?: return
+                            val isSender = dto.senderId == uid
+                            when (type) {
+                                "INSERT" -> {
+                                    // De-dup: skip if we already have this serverId (e.g.
+                                    // optimistic local copy already pushed by the sender).
+                                    val exists = conversationMessages.any { existing ->
+                                        existing.serverId == dto.id ||
+                                            existing.id == "server_${dto.id}"
+                                    }
+                                    if (!exists) {
+                                        conversationMessages.add(dto.toChatMessageItem(uid))
+                                    }
+                                    // Fix 3 — Mark partner messages as read on arrival.
+                                    if (!isSender && dto.id != null && !dto.isRead) {
+                                        chatScope.launch {
+                                            runCatching {
+                                                SupabaseRepository.markMessageRead(dto.id!!)
+                                            }
+                                        }
+                                    }
+                                }
+                                "UPDATE" -> {
+                                    val idx = conversationMessages.indexOfFirst { existing ->
+                                        existing.serverId == dto.id ||
+                                            existing.id == "server_${dto.id}"
+                                    }
+                                    if (idx >= 0) {
+                                        conversationMessages[idx] = dto.toChatMessageItem(uid)
+                                    }
+                                }
+                            }
+                        } catch (_: Throwable) {
+                            // Swallow parse errors — polling fallback keeps the list fresh.
+                        }
+                    }
+
+                    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                        // Polling fallback covers this — no user-visible action.
+                        android.util.Log.w(
+                            "ChatRealtime",
+                            "WebSocket failure: ${t.message ?: "unknown"}"
+                        )
+                    }
+                }
+                val ws = realtimeHttpClient.newWebSocket(req, wsListener)
+
+                onDispose {
+                    try {
+                        val leaveMsg = JSONObject().apply {
+                            put("topic", topic)
+                            put("event", "phx_leave")
+                            put("payload", JSONObject())
+                            put("ref", "2")
+                        }
+                        ws.send(leaveMsg.toString())
+                    } catch (_: Throwable) {}
+                    ws.close(1000, "Conversation exited")
+                }
+            }
+        }
+
+        // =========================================================================
+        // Fix 1 — Polling fallback. Calls `getMessages(matchId)` every 5s while
+        // the conversation is open. Reconciles the local list (adds new rows,
+        // updates read-receipts) without clobbering optimistic `isSending=true`
+        // rows that haven't been confirmed yet.
+        // =========================================================================
+        LaunchedEffect(activeMatchId) {
+            val matchId = activeMatchId ?: return@LaunchedEffect
+            val uid = SessionManager.current()?.userId ?: return@LaunchedEffect
+            while (isActive) {
+                delay(5000L)
+                val fresh = runCatching {
+                    SupabaseRepository.getMessages(matchId)
+                }.getOrDefault(emptyList())
+                if (fresh.isEmpty()) continue
+                val byServerId = fresh.associateBy { it.id }
+                // 1) Append new server messages that aren't in the local list.
+                fresh.forEach { dto ->
+                    val exists = conversationMessages.any { existing ->
+                        existing.serverId == dto.id ||
+                            existing.id == "server_${dto.id}"
+                    }
+                    if (!exists) {
+                        conversationMessages.add(dto.toChatMessageItem(uid))
+                        // Fix 3 — Mark partner messages as read on arrival.
+                        if (dto.senderId != uid && dto.id != null && !dto.isRead) {
+                            runCatching { SupabaseRepository.markMessageRead(dto.id) }
+                        }
+                    }
+                }
+                // 2) Sync read-receipts for already-known messages.
+                for (i in conversationMessages.indices) {
+                    val item = conversationMessages[i]
+                    val match = item.serverId?.let { byServerId[it] }
+                    if (match != null && match.isRead != item.isRead) {
+                        conversationMessages[i] = item.copy(isRead = match.isRead)
+                    }
+                }
             }
         }
 
@@ -1421,10 +1815,7 @@ fun ChatViewContent(
                             )
                             // Cancel button — stops recording WITHOUT sending.
                             Surface(
-                                onClick = {
-                                    isRecordingVoice = false
-                                    voiceRecordSeconds = 0
-                                },
+                                onClick = { cancelVoiceRecording() },
                                 shape = RoundedCornerShape(50),
                                 color = Color(0xFF261E1A),
                                 border = BorderStroke(1.dp, NopeCoral)
@@ -1451,9 +1842,26 @@ fun ChatViewContent(
                             Spacer(modifier = Modifier.width(8.dp))
                             // Send voice button — stops recording AND sends the voice message.
                             Surface(
+                                enabled = !isSendingMessage,
                                 onClick = {
+                                    // Fix 6 — Stop MediaRecorder → get AAC bytes → base64-encode
+                                    // → set as `media_url` data URI on the message row.
                                     val secs = voiceRecordSeconds.coerceAtLeast(1)
                                     val audioDuration = "0:${secs.toString().padStart(2, '0')}"
+                                    val audioBytes = stopVoiceRecording()
+                                    if (audioBytes == null || audioBytes.isEmpty()) {
+                                        Toast.makeText(
+                                            context,
+                                            "Recording too short — try holding longer",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                        return@Surface
+                                    }
+                                    // TODO: move to Supabase Storage when storage SDK is integrated.
+                                    // For now the audio bytes are embedded as a base64 data URI in
+                                    // the `media_url` column so the partner can play it back.
+                                    val b64 = Base64.encodeToString(audioBytes, Base64.NO_WRAP)
+                                    val mediaUrl = "data:audio/mp4;base64,$b64"
                                     val tempId = "msg_${System.currentTimeMillis()}"
                                     conversationMessages.add(
                                         ChatMessageItem(
@@ -1462,20 +1870,16 @@ fun ChatViewContent(
                                             isSender = true,
                                             timestamp = "Just now",
                                             type = ChatMessageType.VOICE,
+                                            mediaUrl = mediaUrl,
                                             audioDuration = audioDuration,
                                             isRead = false,
                                             isSending = true
                                         )
                                     )
-                                    // TODO: integrate MediaRecorder for real recording
-                                    isRecordingVoice = false
-                                    voiceRecordSeconds = 0
+                                    // Fix 7 — One-shot send guard.
+                                    isSendingMessage = true
 
                                     // Chat-Wiring — Persist the voice message row to Supabase.
-                                    // The audio bytes themselves are not uploaded yet (no storage
-                                    // pipeline); only the metadata row is inserted so the message
-                                    // appears in the partner's history. The local waveform UI
-                                    // renders from `audioDuration`.
                                     val matchId = activeMatchId
                                     val uid = SessionManager.current()?.userId
                                     if (matchId != null && uid != null) {
@@ -1487,12 +1891,16 @@ fun ChatViewContent(
                                                     receiverId = partner.id,
                                                     content = "",
                                                     type = "voice",
+                                                    mediaUrl = mediaUrl,
                                                     audioDuration = audioDuration,
                                                     replyToId = null
                                                 )
                                             }.getOrNull()
                                             val idx = conversationMessages.indexOfFirst { it.id == tempId }
-                                            if (idx < 0) return@launch
+                                            if (idx < 0) {
+                                                isSendingMessage = false
+                                                return@launch
+                                            }
                                             if (sent != null) {
                                                 conversationMessages[idx] = conversationMessages[idx].copy(
                                                     isSending = false,
@@ -1502,12 +1910,14 @@ fun ChatViewContent(
                                                 conversationMessages.removeAt(idx)
                                                 Toast.makeText(context, "Message failed to send", Toast.LENGTH_SHORT).show()
                                             }
+                                            isSendingMessage = false
                                         }
                                     } else {
                                         val idx = conversationMessages.indexOfFirst { it.id == tempId }
                                         if (idx >= 0) {
                                             conversationMessages[idx] = conversationMessages[idx].copy(isSending = false)
                                         }
+                                        isSendingMessage = false
                                     }
                                 },
                                 shape = CircleShape,
@@ -1612,9 +2022,12 @@ fun ChatViewContent(
                                                 ).show()
                                             },
                                             onLongClick = {
-                                                voiceRecordSeconds = 0
-                                                isRecordingVoice = true
-                                                // TODO: integrate MediaRecorder for real recording
+                                                // Fix 6 — Request RECORD_AUDIO at runtime. The
+                                                // launcher's grant-callback invokes
+                                                // `startVoiceRecording()` which opens MediaRecorder.
+                                                recordAudioPermissionLauncher.launch(
+                                                    android.Manifest.permission.RECORD_AUDIO
+                                                )
                                             }
                                         ),
                                     contentAlignment = Alignment.Center
@@ -1628,8 +2041,9 @@ fun ChatViewContent(
                                 }
                             } else {
                                 IconButton(
+                                    enabled = !isSendingMessage,
                                     onClick = {
-                                        if (chatMessageInput.isNotBlank()) {
+                                        if (chatMessageInput.isNotBlank() && !isSendingMessage) {
                                             val replySnapshot = replyTarget
                                             val tempId = "msg_${System.currentTimeMillis()}"
                                             val textToSend = chatMessageInput.trim()
@@ -1650,6 +2064,11 @@ fun ChatViewContent(
                                             chatMessageInput = ""
                                             replyTarget = null
 
+                                            // Fix 7 — One-shot send guard. Disables the send
+                                            // button for the duration of the Supabase round-trip
+                                            // so a second rapid tap can't double-send.
+                                            isSendingMessage = true
+
                                             // Chat-Wiring — Persist the outgoing text to Supabase.
                                             // Optimistic UI is already updated above; we just
                                             // confirm with the API and patch serverId / isSending
@@ -1669,7 +2088,10 @@ fun ChatViewContent(
                                                         )
                                                     }.getOrNull()
                                                     val idx = conversationMessages.indexOfFirst { it.id == tempId }
-                                                    if (idx < 0) return@launch
+                                                    if (idx < 0) {
+                                                        isSendingMessage = false
+                                                        return@launch
+                                                    }
                                                     if (sent != null) {
                                                         conversationMessages[idx] = conversationMessages[idx].copy(
                                                             isSending = false,
@@ -1679,6 +2101,7 @@ fun ChatViewContent(
                                                         conversationMessages.removeAt(idx)
                                                         Toast.makeText(context, "Message failed to send", Toast.LENGTH_SHORT).show()
                                                     }
+                                                    isSendingMessage = false
                                                 }
                                             } else {
                                                 // Dev fallback — no matchId, clear the spinner locally.
@@ -1686,45 +2109,18 @@ fun ChatViewContent(
                                                 if (idx >= 0) {
                                                     conversationMessages[idx] = conversationMessages[idx].copy(isSending = false)
                                                 }
+                                                isSendingMessage = false
                                             }
 
-                                            // Feature #19 — Simulate partner typing then canned reply.
-                                            // TODO: replace canned-reply simulation with realtime subscription when available.
-                                            if (!partnerIsTyping) {
-                                                chatScope.launch {
-                                                    partnerIsTyping = true
-                                                    delay(1500L)
-                                                    val cannedReplies = listOf(
-                                                        "Haha that's nice 😄",
-                                                        "Oh really? Tell me more 👀",
-                                                        "Love that! 🙌",
-                                                        "Haha you're cute 😊"
-                                                    )
-                                                    conversationMessages.add(
-                                                        ChatMessageItem(
-                                                            id = "msg_${System.currentTimeMillis()}",
-                                                            text = cannedReplies.random(),
-                                                            isSender = false,
-                                                            timestamp = "Just now"
-                                                        )
-                                                    )
-                                                    partnerIsTyping = false
-
-                                                    // Feature #20 — Mark the most recent sender message as read ~2s later.
-                                                    delay(2000L)
-                                                    val lastSenderIdx = conversationMessages.indexOfLast { it.isSender }
-                                                    if (lastSenderIdx >= 0 && !conversationMessages[lastSenderIdx].isRead) {
-                                                        conversationMessages[lastSenderIdx] =
-                                                            conversationMessages[lastSenderIdx].copy(isRead = true)
-                                                    }
-                                                }
-                                            }
+                                            // Fix 1 — Canned typing/reply simulation removed.
+                                            // Partner replies now arrive only via the Supabase
+                                            // Realtime websocket (or the 5s polling fallback).
                                         }
                                     },
                                     modifier = Modifier
                                         .size(42.dp)
                                         .clip(CircleShape)
-                                        .background(DashboardTerracotta)
+                                        .background(if (isSendingMessage) DashboardNavMuted else DashboardTerracotta)
                                 ) {
                                     Icon(
                                         imageVector = Icons.AutoMirrored.Filled.Send,
@@ -1844,7 +2240,7 @@ fun ChatViewContent(
                         }
                     }
                 }
-                if (sampleRequests.isNotEmpty()) {
+                if (realRequests.isNotEmpty()) {
                     Surface(
                         shape = CircleShape,
                         color = TinderCoral,
@@ -1852,7 +2248,7 @@ fun ChatViewContent(
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Text(
-                                text = sampleRequests.size.toString(),
+                                text = realRequests.size.toString(),
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White
@@ -1950,34 +2346,10 @@ fun ChatViewContent(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                val sampleThreads = listOf(
-                    ChatThreadItem(
-                        profile = profiles.first(),
-                        lastMessage = "+2349135010078",
-                        timestamp = "12:20",
-                        isUnread = true,
-                        isYourTurn = true
-                    ),
-                    ChatThreadItem(
-                        profile = profiles.getOrElse(1) { profiles.first() },
-                        lastMessage = "https://wa.me/qr/TZI7IFSB2QZ...",
-                        timestamp = "Yesterday",
-                        isUnread = false
-                    ),
-                    ChatThreadItem(
-                        profile = profiles.getOrElse(2) { profiles.first() },
-                        lastMessage = "From your first Like to date night downtown...",
-                        timestamp = "Oct 24",
-                        isUnread = false
-                    ),
-                    ChatThreadItem(
-                        profile = profiles.getOrElse(3) { profiles.first() },
-                        lastMessage = "Awesome! Have you visited the new cafe downtown?",
-                        timestamp = "Sep 15",
-                        isUnread = false
-                    )
-                )
-
+                // Fix 2 — Real chat threads come from `realThreads` (populated by
+                // the LaunchedEffect above from SupabaseRepository.getMatches +
+                // getProfilesByIds + getMessages). The hardcoded `sampleThreads`
+                // list has been deleted.
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -1987,8 +2359,28 @@ fun ChatViewContent(
                     // window on first entry to the Chat tray).
                     if (chatTrayLoading) {
                         items(5) { ChatThreadShimmerRow() }
+                    } else if (realThreads.isEmpty()) {
+                        // Fix 2 — Empty state. Shown when the user has no matches.
+                        item(key = "empty_matches") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 80.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text(
+                                        text = "No matches yet. Start swiping to find your match! 💘",
+                                        fontSize = 14.sp,
+                                        color = DashboardNavMuted,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                        modifier = Modifier.padding(horizontal = 32.dp)
+                                    )
+                                }
+                            }
+                        }
                     } else {
-                    items(sampleThreads) { thread ->
+                    items(realThreads, key = { it.profile.id }) { thread ->
                         Surface(
                             onClick = { activeChatProfile = thread.profile },
                             color = DashboardCard,
@@ -2094,7 +2486,11 @@ fun ChatViewContent(
                         .fillMaxSize()
                         .padding(horizontal = 16.dp)
                 ) {
-                    if (sampleRequests.isEmpty()) {
+                    if (requestsLoading) {
+                        Spacer(modifier = Modifier.height(20.dp))
+                        repeat(3) { ChatThreadShimmerRow() }
+                    } else if (realRequests.isEmpty()) {
+                        // Fix 4 — Empty state.
                         Spacer(modifier = Modifier.height(60.dp))
                         Text(
                             text = "No pending requests",
@@ -2108,7 +2504,7 @@ fun ChatViewContent(
                             modifier = Modifier.fillMaxSize(),
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            items(sampleRequests, key = { it.profile.id }) { request ->
+                            items(realRequests, key = { it.profile.id }) { request ->
                                 Surface(
                                     color = DashboardCard,
                                     modifier = Modifier.fillMaxWidth()
@@ -2161,15 +2557,20 @@ fun ChatViewContent(
                                             )
                                             Spacer(modifier = Modifier.height(8.dp))
                                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                // Accept — DashboardTerracotta pill.
+                                                // Accept — opens the conversation with this user.
+                                                // (Creates a match row server-side if needed via the
+                                                // existing swipe + match-creation pipeline; here we
+                                                // just navigate to the chat so the matchId-resolution
+                                                // path in the conversation LaunchedEffect picks it up.)
                                                 Surface(
                                                     onClick = {
                                                         Toast.makeText(
                                                             context,
-                                                            "Request accepted",
+                                                            "Request accepted — opening chat",
                                                             Toast.LENGTH_SHORT
                                                         ).show()
-                                                        sampleRequests.removeAll { it.profile.id == request.profile.id }
+                                                        realRequests.removeAll { it.profile.id == request.profile.id }
+                                                        activeChatProfile = request.profile
                                                     },
                                                     shape = RoundedCornerShape(50),
                                                     color = DashboardTerracotta
@@ -2286,202 +2687,13 @@ fun ChatViewContent(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                // Fix 5 — Removed "Quick Share: Hills Scenery Photo" and
+                // "Quick Share: Lake District Video Clip" preset buttons. The
+                // real PickVisualMedia launcher above is the only media-source
+                // path now — no more hardcoded Unsplash / city-imagery URLs.
 
-                // Quick Demo Photo Sender
-                Surface(
-                    onClick = {
-                        showMediaPickerSheet = false
-                        val photoText = "Here's a view from the hills! 🌿"
-                        val photoUrl = "https://images.unsplash.com/photo-1596895111956-bf1cf0599ce5?auto=format&fit=crop&w=800&q=80"
-                        val tempId = "msg_${System.currentTimeMillis()}"
-                        conversationMessages.add(
-                            ChatMessageItem(
-                                id = tempId,
-                                text = photoText,
-                                isSender = true,
-                                timestamp = "Just now",
-                                type = ChatMessageType.IMAGE,
-                                mediaUrl = photoUrl,
-                                isRead = false,
-                                isSending = true
-                            )
-                        )
-                        Toast.makeText(context, "Photo shared", Toast.LENGTH_SHORT).show()
-                        // Chat-Wiring — Persist the quick-share photo to Supabase.
-                        val matchId = activeMatchId
-                        val uid = SessionManager.current()?.userId
-                        val partnerProfile = activeChatProfile
-                        if (matchId != null && uid != null && partnerProfile != null) {
-                            chatScope.launch {
-                                val sent = runCatching {
-                                    SupabaseRepository.sendMessage(
-                                        matchId = matchId,
-                                        senderId = uid,
-                                        receiverId = partnerProfile.id,
-                                        content = photoText,
-                                        type = "image",
-                                        mediaUrl = photoUrl
-                                    )
-                                }.getOrNull()
-                                val idx = conversationMessages.indexOfFirst { it.id == tempId }
-                                if (idx < 0) return@launch
-                                if (sent != null) {
-                                    conversationMessages[idx] = conversationMessages[idx].copy(
-                                        isSending = false,
-                                        serverId = sent.id
-                                    )
-                                } else {
-                                    conversationMessages.removeAt(idx)
-                                    Toast.makeText(context, "Message failed to send", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        } else {
-                            val idx = conversationMessages.indexOfFirst { it.id == tempId }
-                            if (idx >= 0) {
-                                conversationMessages[idx] = conversationMessages[idx].copy(isSending = false)
-                            }
-                        }
-                    },
-                    shape = RoundedCornerShape(12.dp),
-                    color = Color(0xFF261E1A),
-                    border = BorderStroke(1.dp, Color(0xFF42342D)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = Color(0xFF382D27),
-                            modifier = Modifier.size(40.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.Image,
-                                    contentDescription = null,
-                                    tint = DashboardPeach,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.width(14.dp))
-                        Column {
-                            Text(
-                                text = "Quick Share: Hills Scenery Photo",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = DashboardCream
-                            )
-                            Text(
-                                text = "Instant high-resolution photo sample",
-                                fontSize = 11.sp,
-                                color = DashboardNavMuted
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Quick Demo Video Sender
-                Surface(
-                    onClick = {
-                        showMediaPickerSheet = false
-                        val videoText = "Check out this lake district houseboat clip! 🚤"
-                        val videoUrl = "https://images.unsplash.com/photo-1593693397690-362cb9666fc2?auto=format&fit=crop&w=800&q=80"
-                        val tempId = "msg_${System.currentTimeMillis()}"
-                        conversationMessages.add(
-                            ChatMessageItem(
-                                id = tempId,
-                                text = videoText,
-                                isSender = true,
-                                timestamp = "Just now",
-                                type = ChatMessageType.VIDEO,
-                                mediaUrl = videoUrl,
-                                videoDuration = "0:24",
-                                isRead = false,
-                                isSending = true
-                            )
-                        )
-                        Toast.makeText(context, "Video shared", Toast.LENGTH_SHORT).show()
-                        // Chat-Wiring — Persist the quick-share video to Supabase.
-                        val matchId = activeMatchId
-                        val uid = SessionManager.current()?.userId
-                        val partnerProfile = activeChatProfile
-                        if (matchId != null && uid != null && partnerProfile != null) {
-                            chatScope.launch {
-                                val sent = runCatching {
-                                    SupabaseRepository.sendMessage(
-                                        matchId = matchId,
-                                        senderId = uid,
-                                        receiverId = partnerProfile.id,
-                                        content = videoText,
-                                        type = "video",
-                                        mediaUrl = videoUrl
-                                    )
-                                }.getOrNull()
-                                val idx = conversationMessages.indexOfFirst { it.id == tempId }
-                                if (idx < 0) return@launch
-                                if (sent != null) {
-                                    conversationMessages[idx] = conversationMessages[idx].copy(
-                                        isSending = false,
-                                        serverId = sent.id
-                                    )
-                                } else {
-                                    conversationMessages.removeAt(idx)
-                                    Toast.makeText(context, "Message failed to send", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        } else {
-                            val idx = conversationMessages.indexOfFirst { it.id == tempId }
-                            if (idx >= 0) {
-                                conversationMessages[idx] = conversationMessages[idx].copy(isSending = false)
-                            }
-                        }
-                    },
-                    shape = RoundedCornerShape(12.dp),
-                    color = Color(0xFF261E1A),
-                    border = BorderStroke(1.dp, Color(0xFF42342D)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = Color(0xFF382D27),
-                            modifier = Modifier.size(40.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.Videocam,
-                                    contentDescription = null,
-                                    tint = DashboardPeach,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.width(14.dp))
-                        Column {
-                            Text(
-                                text = "Quick Share: Lake District Video Clip",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = DashboardCream
-                            )
-                            Text(
-                                text = "Instant video clip with player overlay",
-                                fontSize = 11.sp,
-                                color = DashboardNavMuted
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(24.dp)
+                )
             }
         }
     }
@@ -2742,7 +2954,22 @@ fun ChatViewContent(
             confirmButton = {
                 Button(
                     onClick = {
-                        sampleRequests.removeAll { it.profile.id == profileId }
+                        // Fix 4 — Persist the block server-side, then remove the
+                        // local request row + Toast. Best-effort: failures are
+                        // surfaced as a Toast but the local row is still removed
+                        // so the UI is consistent.
+                        val uid = SessionManager.current()?.userId
+                        if (uid != null) {
+                            chatScope.launch {
+                                val err = runCatching {
+                                    SupabaseRepository.blockUser(uid, profileId)
+                                }.getOrNull()
+                                if (err != null) {
+                                    Toast.makeText(context, err, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                        realRequests.removeAll { it.profile.id == profileId }
                         Toast.makeText(context, "Blocked", Toast.LENGTH_SHORT).show()
                         showBlockConfirm = null
                     },

@@ -219,6 +219,56 @@ object SupabaseRepository {
         }
     }
 
+    // ---------- Profile-by-id ----------
+
+    /**
+     * Fetches the full `profiles` rows for a list of user ids (used by the chat
+     * tray to look up partner profiles for each match). Reuses the same
+     * `SwipeDeckProfileDto` adapter + `toDatingProfile()` mapping as the swipe
+     * deck RPC. Photos are pulled from the same JSON shape (`photos` array).
+     */
+    suspend fun getProfilesByIds(ids: List<String>): List<DatingProfile> = withContext(Dispatchers.IO) {
+        if (ids.isEmpty()) return@withContext emptyList()
+        val csv = ids.joinToString(",")
+        val profReq = Request.Builder()
+            .url("${SupabaseConfig.REST_BASE}/profiles?id=in.($csv)")
+            .get().build()
+        SupabaseClient.http.newCall(profReq).execute().use { resp ->
+            if (!resp.isSuccessful) emptyList()
+            else deckAdapter.fromJson(resp.body?.string().orEmpty()).orEmpty().map { it.toDatingProfile() }
+        }
+    }
+
+    // ---------- Inbound likes / message requests ----------
+
+    /**
+     * Returns the profiles of users who liked/superliked the given user —
+     * the "message requests" inbox.
+     *
+     * Two REST calls: first the swiper_ids from `swipes`, then the matching
+     * rows from `profiles`.
+     *
+     * NOTE: depends on a `swipes_received_read` RLS policy (or SECURITY DEFINER
+     * RPC) to return non-empty results. The query is wired end-to-end now so
+     * the UI works as soon as the policy lands server-side. Until then,
+     * returns an empty list (which the UI surfaces as "No pending requests").
+     */
+    suspend fun getLikesReceivedProfiles(userId: String): List<DatingProfile> = withContext(Dispatchers.IO) {
+        val idsReq = Request.Builder()
+            .url(
+                "${SupabaseConfig.REST_BASE}/swipes" +
+                    "?swiped_id=eq.$userId&action=in.(like,superlike)&select=swiper_id"
+            )
+            .get().build()
+        val ids = SupabaseClient.http.newCall(idsReq).execute().use { resp ->
+            if (!resp.isSuccessful) return@withContext emptyList()
+            val raw = resp.body?.string().orEmpty()
+            idsListAdapter.fromJson(raw).orEmpty().mapNotNull { it["swiper_id"] as? String }
+        }
+        if (ids.isEmpty()) return@withContext emptyList()
+        getProfilesByIds(ids)
+    }
+
     /**
      * Upserts a reaction row for the given (messageId, userId) pair.
      * The unique(message_id, user_id) constraint on `message_reactions` combined
@@ -442,6 +492,21 @@ object SupabaseRepository {
     }
 
     // ---------- Blocked users ----------
+
+    /** Blocks a user. Returns null on success, or an error message string. */
+    suspend fun blockUser(blockerId: String, blockedId: String): String? = withContext(Dispatchers.IO) {
+        val body = reqAdapter.toJson(
+            mapOf("blocker_id" to blockerId, "blocked_id" to blockedId)
+        )
+        val req = Request.Builder()
+            .url("${SupabaseConfig.REST_BASE}/blocked_users")
+            .header("Prefer", "return=minimal,resolution=merge-duplicates")
+            .post(body.toRequestBody(json))
+            .build()
+        SupabaseClient.http.newCall(req).execute().use { resp ->
+            if (resp.isSuccessful) null else "Could not block user. Please try again."
+        }
+    }
 
     /** Unblocks a user. Returns null on success, or error. */
     suspend fun unblockUser(blockerId: String, blockedId: String): String? = withContext(Dispatchers.IO) {
