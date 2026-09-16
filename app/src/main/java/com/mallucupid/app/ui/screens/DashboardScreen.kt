@@ -41,6 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -210,6 +211,13 @@ fun DashboardScreen(
                 currentDraft = verifiedDraft
                 showFaceVerificationScreen = false
                 actionToast = "Face Verified! Blue checkmark badge applied"
+                // Persist is_verified=true to Supabase
+                coroutineScope.launch {
+                    val uid = SessionManager.current()?.userId
+                    if (uid != null) {
+                        SupabaseRepository.saveProfile(uid, verifiedDraft.registeredEmail.ifBlank { SessionManager.current()?.email.orEmpty() }, verifiedDraft)
+                    }
+                }
             },
             onBack = { showFaceVerificationScreen = false }
         )

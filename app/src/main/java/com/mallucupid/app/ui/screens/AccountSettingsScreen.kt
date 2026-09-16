@@ -125,7 +125,17 @@ fun AccountSettingsScreen(
                 draft = draft,
                 onVerificationComplete = { updated ->
                     draft = updated
+                    // Persist is_verified=true to Supabase
+                    coroutineScope.launch {
+                        val uid = SessionManager.current()?.userId
+                        if (uid != null) {
+                            withContext(Dispatchers.IO) {
+                                SupabaseRepository.saveProfile(uid, updated.registeredEmail.ifBlank { SessionManager.current()?.email.orEmpty() }, updated)
+                            }
+                        }
+                    }
                     currentSubView = "MAIN"
+                    Toast.makeText(context, "Face Verified! Blue checkmark applied", Toast.LENGTH_SHORT).show()
                 },
                 onBack = { currentSubView = "MAIN" }
             )
