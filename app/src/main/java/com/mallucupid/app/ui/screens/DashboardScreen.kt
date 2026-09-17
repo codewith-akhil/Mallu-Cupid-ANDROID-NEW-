@@ -48,6 +48,7 @@ import coil.compose.AsyncImage
 import com.mallucupid.app.data.DatingProfile
 import com.mallucupid.app.data.OnboardingDraft
 import com.mallucupid.app.data.SampleProfiles
+import com.mallucupid.app.data.remote.ProfileSettingsPatch
 import com.mallucupid.app.data.remote.SessionManager
 import com.mallucupid.app.data.remote.SupabaseRepository
 import com.mallucupid.app.location.LocationHelper
@@ -710,11 +711,49 @@ fun DashboardScreen(
                 dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.3f)) }
             ) {
                 FilterSheetContent(
-                    userDraft = userDraft,
-                    onApply = {
-                        showFilterSheet = false
-                        actionToast = "Filters applied successfully"
-                    }
+                    userDraft = currentDraft,
+                    onApply = { distance, ageMin, ageMax, interestedIn ->
+                        coroutineScope.launch {
+                            val uid = SessionManager.current()?.userId
+                            if (uid == null) {
+                                actionToast = "Could not apply filters. Please try again."
+                                return@launch
+                            }
+                            // Save filters to DB via ProfileSettingsPatch.
+                            val ok = SupabaseRepository.saveProfileSettings(
+                                ProfileSettingsPatch(
+                                    maxDistanceKm = distance,
+                                    ageMin = ageMin,
+                                    ageMax = ageMax,
+                                    interestedIn = interestedIn
+                                ),
+                                uid
+                            )
+                            if (!ok) {
+                                actionToast = "Could not apply filters. Please try again."
+                                return@launch
+                            }
+                            // Reflect the saved filters in the in-memory draft so a
+                            // subsequent sheet open starts from the persisted state.
+                            currentDraft = currentDraft.copy(
+                                maxDistanceKm = distance,
+                                ageMin = ageMin,
+                                ageMax = ageMax,
+                                interestedIn = interestedIn
+                            )
+                            // Reload the swipe deck with the new filters applied.
+                            deckLoading = true
+                            val deck = SupabaseRepository.getSwipeDeck(limit = 20)
+                            if (deck.isNotEmpty()) {
+                                profiles.clear()
+                                profiles.addAll(deck)
+                            }
+                            deckLoading = false
+                            actionToast = "Filters applied"
+                            showFilterSheet = false
+                        }
+                    },
+                    onDismiss = { showFilterSheet = false }
                 )
             }
         }
@@ -1493,20 +1532,51 @@ private fun UserProfileView(
 // -------------------------------------------------------------
 // FILTER BOTTOM SHEET CONTENT
 // -------------------------------------------------------------
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FilterSheetContent(
     userDraft: OnboardingDraft,
-    onApply: () -> Unit
+    onApply: (Int, Int, Int, List<String>) -> Unit,
+    onDismiss: () -> Unit
 ) {
-    var distance by remember { mutableFloatStateOf(userDraft.distance.toFloat()) }
-    var ageMin by remember { mutableFloatStateOf(userDraft.ageMin.toFloat()) }
-    var ageMax by remember { mutableFloatStateOf(userDraft.ageMax.toFloat()) }
+    // Initial state read from userDraft.maxDistanceKm (NOT the legacy `distance`
+    // field) and from ageMin / ageMax / interestedIn, so the sheet always
+    // reflects the latest profile state.
+    var distance by remember {
+        mutableFloatStateOf(userDraft.maxDistanceKm.toFloat().coerceIn(5f, 200f))
+    }
+    var ageMin by remember {
+        mutableFloatStateOf(userDraft.ageMin.toFloat().coerceIn(18f, 80f))
+    }
+    var ageMax by remember {
+        // Defensive: ensure max >= min on init in case the persisted row is stale.
+        mutableFloatStateOf(
+            maxOf(userDraft.ageMax.toFloat(), userDraft.ageMin.toFloat()).coerceIn(18f, 99f)
+        )
+    }
+    var interestedIn by remember { mutableStateOf(userDraft.interestedIn) }
+    var isApplying by remember { mutableStateOf(false) }
+
+    // Safety net: if the parent doesn't dismiss the sheet (e.g. save failed or
+    // there was no session), re-enable the Apply button after a brief window so
+    // the user can retry instead of staring at a stuck spinner.
+    LaunchedEffect(isApplying) {
+        if (isApplying) {
+            kotlinx.coroutines.delay(10_000)
+            isApplying = false
+        }
+    }
+
+    val interestChoices = listOf(
+        "Women", "Men", "Transmen", "Transwomen", "Couples", "Anyone"
+    )
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 12.dp)
-            .padding(bottom = 24.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp)
+            .padding(top = 12.dp, bottom = 24.dp)
     ) {
         Text(
             text = "Discovery Filters",
@@ -1523,6 +1593,81 @@ private fun FilterSheetContent(
 
         Spacer(modifier = Modifier.height(20.dp))
 
+        // --- Show Me -------------------------------------------------------
+        Text(
+            text = "Show Me",
+            color = DashboardCream,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Multi-select chips, two per row. "Anyone" is mutually exclusive with
+        // every other option — selecting it clears the rest, and selecting any
+        // specific option clears "Anyone". Matches AccountSettingsScreen.
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            interestChoices.chunked(2).forEach { pair ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    pair.forEach { choice ->
+                        val isSelected = interestedIn.contains(choice)
+                        Surface(
+                            onClick = {
+                                interestedIn = if (choice == "Anyone") {
+                                    if (isSelected) listOf("Women") else listOf("Anyone")
+                                } else {
+                                    val base = interestedIn
+                                        .filter { it != "Anyone" }
+                                        .toMutableList()
+                                    if (isSelected) {
+                                        base.remove(choice)
+                                        if (base.isEmpty()) base.add("Women")
+                                    } else {
+                                        base.add(choice)
+                                    }
+                                    base
+                                }
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isSelected) DashboardTerracotta else Color(0xFF261E1A),
+                            border = BorderStroke(
+                                1.dp,
+                                if (isSelected) DashboardPeach else Color(0xFF42342D)
+                            ),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                if (isSelected) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                }
+                                Text(
+                                    text = choice,
+                                    fontSize = 13.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isSelected) Color.White else DashboardMutedBeige
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // --- Maximum Distance ---------------------------------------------
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
@@ -1534,11 +1679,15 @@ private fun FilterSheetContent(
             value = distance,
             onValueChange = { distance = it },
             valueRange = 5f..200f,
-            colors = SliderDefaults.colors(thumbColor = DashboardTerracotta, activeTrackColor = DashboardTerracotta)
+            colors = SliderDefaults.colors(
+                thumbColor = DashboardTerracotta,
+                activeTrackColor = DashboardTerracotta
+            )
         )
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // --- Age Range (two sliders) --------------------------------------
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
@@ -1546,22 +1695,63 @@ private fun FilterSheetContent(
             Text("Age Range", color = DashboardCream, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             Text("${ageMin.toInt()} – ${ageMax.toInt()}", color = DashboardPeach, fontSize = 14.sp, fontWeight = FontWeight.Bold)
         }
+        // Min age — clamped so it can never exceed max.
+        Slider(
+            value = ageMin,
+            onValueChange = { ageMin = it.coerceAtMost(ageMax) },
+            valueRange = 18f..80f,
+            colors = SliderDefaults.colors(
+                thumbColor = DashboardTerracotta,
+                activeTrackColor = DashboardTerracotta
+            )
+        )
+        // Max age — clamped so it can never drop below min.
         Slider(
             value = ageMax,
-            onValueChange = { ageMax = it },
-            valueRange = 18f..60f,
-            colors = SliderDefaults.colors(thumbColor = DashboardTerracotta, activeTrackColor = DashboardTerracotta)
+            onValueChange = { ageMax = it.coerceAtLeast(ageMin) },
+            valueRange = 18f..99f,
+            colors = SliderDefaults.colors(
+                thumbColor = DashboardTerracotta,
+                activeTrackColor = DashboardTerracotta
+            )
         )
 
         Spacer(modifier = Modifier.height(24.dp))
 
+        // --- Apply button --------------------------------------------------
         Button(
-            onClick = onApply,
-            modifier = Modifier.fillMaxWidth().height(52.dp),
+            onClick = {
+                if (!isApplying) {
+                    isApplying = true
+                    onApply(distance.toInt(), ageMin.toInt(), ageMax.toInt(), interestedIn)
+                }
+            },
+            enabled = !isApplying,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
             shape = RoundedCornerShape(50),
             colors = ButtonDefaults.buttonColors(containerColor = DashboardTerracotta)
         ) {
-            Text("Apply Filters", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            if (isApplying) {
+                CircularProgressIndicator(
+                    color = Color.White,
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp
+                )
+            } else {
+                Text("Apply Filters", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        TextButton(
+            onClick = onDismiss,
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !isApplying
+        ) {
+            Text("Cancel", color = DashboardNavMuted, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         }
     }
 }
