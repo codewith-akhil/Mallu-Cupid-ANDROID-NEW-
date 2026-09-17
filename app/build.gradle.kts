@@ -17,7 +17,7 @@ android {
     applicationId = "com.mallucupid.connect"
     minSdk = 26
     targetSdk = 36
-    versionCode = 1000
+    versionCode = 1001
     versionName = "1.0.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

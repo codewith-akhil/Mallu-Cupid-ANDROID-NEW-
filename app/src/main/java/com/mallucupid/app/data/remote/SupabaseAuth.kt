@@ -32,8 +32,9 @@ object SupabaseAuth {
 
     /** Creates a user. Returns null on success, or a user-friendly error message. */
     suspend fun signUp(email: String, password: String): String? = withContext(Dispatchers.IO) {
+        val cleanEmail = email.trim()
         try {
-            val body = reqAdapter.toJson(mapOf("email" to email, "password" to password))
+            val body = reqAdapter.toJson(mapOf("email" to cleanEmail, "password" to password))
             val req = Request.Builder()
                 .url("${SupabaseConfig.AUTH_BASE}/signup")
                 .header("apikey", SupabaseConfig.SUPABASE_ANON_KEY)
@@ -45,15 +46,15 @@ object SupabaseAuth {
                     when {
                         text.contains("already registered", ignoreCase = true) -> "This email is already registered. Try signing in."
                         text.contains("weak", ignoreCase = true) -> "Password is too weak. Use at least 8 characters with a number."
-                        text.contains("invalid", ignoreCase = true) -> "Wrong email or password."
-                        else -> "Wrong email or password."
+                        text.contains("invalid", ignoreCase = true) -> "Please check your email and try again."
+                        else -> "Couldn't create your account. Please try again."
                     }
                 } else null
             }
         } catch (e: IOException) {
             "No internet. Check your connection and try again."
         } catch (e: Exception) {
-            "Wrong email or password."
+            "Couldn't create your account. Please try again."
         }
     }
 
@@ -61,8 +62,9 @@ object SupabaseAuth {
 
     /** Returns access_token on success, or null + user-friendly error. */
     suspend fun signInWithPassword(email: String, password: String): Pair<String?, String?> = withContext(Dispatchers.IO) {
+        val cleanEmail = email.trim()
         try {
-            val body = reqAdapter.toJson(mapOf("email" to email, "password" to password))
+            val body = reqAdapter.toJson(mapOf("email" to cleanEmail, "password" to password))
             val req = Request.Builder()
                 .url("${SupabaseConfig.AUTH_BASE}/token?grant_type=password")
                 .header("apikey", SupabaseConfig.SUPABASE_ANON_KEY)
@@ -107,9 +109,10 @@ object SupabaseAuth {
         private set
 
     suspend fun sendOtp(email: String): String? = withContext(Dispatchers.IO) {
+        val cleanEmail = email.trim()
         try {
             lastDevCode = null
-            val body = reqAdapter.toJson(mapOf("email" to email))
+            val body = reqAdapter.toJson(mapOf("email" to cleanEmail))
             val req = Request.Builder()
                 .url("${SupabaseConfig.FUNCTIONS_BASE}/send-otp")
                 .post(body.toRequestBody(json))
@@ -144,8 +147,9 @@ object SupabaseAuth {
 
     /** Verifies the OTP code. Returns null on success, or a user-friendly error. */
     suspend fun verifyOtp(email: String, code: String): String? = withContext(Dispatchers.IO) {
+        val cleanEmail = email.trim()
         try {
-            val body = reqAdapter.toJson(mapOf("email" to email, "code" to code))
+            val body = reqAdapter.toJson(mapOf("email" to cleanEmail, "code" to code))
             val req = Request.Builder()
                 .url("${SupabaseConfig.FUNCTIONS_BASE}/verify-otp")
                 .post(body.toRequestBody(json))
@@ -173,8 +177,9 @@ object SupabaseAuth {
 
     /** Resets the user's password. Returns null on success, or a user-friendly error. */
     suspend fun resetPassword(email: String, newPassword: String): String? = withContext(Dispatchers.IO) {
+        val cleanEmail = email.trim()
         try {
-            val body = reqAdapter.toJson(mapOf("email" to email, "new_password" to newPassword))
+            val body = reqAdapter.toJson(mapOf("email" to cleanEmail, "new_password" to newPassword))
             val req = Request.Builder()
                 .url("${SupabaseConfig.FUNCTIONS_BASE}/reset-password")
                 .post(body.toRequestBody(json))
