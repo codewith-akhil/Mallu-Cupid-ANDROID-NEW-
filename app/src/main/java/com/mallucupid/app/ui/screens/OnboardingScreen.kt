@@ -60,6 +60,7 @@ import coil.compose.AsyncImage
 import com.mallucupid.app.data.OnboardingDraft
 import com.mallucupid.app.data.PromptItem
 import com.mallucupid.app.data.SampleProfiles
+import com.mallucupid.app.data.remote.SupabaseRepository
 import com.mallucupid.app.location.LocationHelper
 import com.mallucupid.app.ui.theme.*
 import kotlinx.coroutines.launch
@@ -343,7 +344,10 @@ private fun OnboardingStepBody(
             city = draft.city,
             onCityChange = { city, lat, lng -> onDraftChange(draft.copy(city = city, latitude = lat, longitude = lng)) },
             distance = draft.distance,
-            onDistanceChange = { onDraftChange(draft.copy(distance = it)) }
+            onDistanceChange = { onDraftChange(draft.copy(distance = it)) },
+            onCountryDetected = { countryName, isoCode, minAge ->
+                onDraftChange(draft.copy(country = countryName, countryIsoCode = isoCode, countryMinAge = minAge))
+            }
         )
         3 -> Step2Birthday(
             day = draft.birthDay,
@@ -956,7 +960,8 @@ private fun Step3Location(
     city: String,
     onCityChange: (String, Double?, Double?) -> Unit,
     distance: Int,
-    onDistanceChange: (Int) -> Unit
+    onDistanceChange: (Int) -> Unit,
+    onCountryDetected: (String, String, Int) -> Unit = { _, _, _ -> }
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -965,11 +970,18 @@ private fun Step3Location(
     fun fetchDeviceLocation() {
         isLocating = true
         coroutineScope.launch {
+            if (!LocationHelper.isGpsEnabled(context)) {
+                isLocating = false
+                return@launch
+            }
             val loc = LocationHelper.getCurrentLocation(context)
             if (loc != null) {
                 onCityChange(loc.fullLocation, loc.latitude, loc.longitude)
+                if (loc.countryCode.isNotBlank()) {
+                    val minAge = SupabaseRepository.getMinAgeForCountry(loc.countryCode)
+                    onCountryDetected(loc.countryName, loc.countryCode, minAge)
+                }
             } else {
-                // Location unavailable — leave city empty so user can type manually
                 onCityChange("", null, null)
             }
             isLocating = false
@@ -988,30 +1000,36 @@ private fun Step3Location(
         }
     }
 
+    // Auto-fetch location on step load if permission already granted
+    LaunchedEffect(Unit) {
+        if (LocationHelper.hasLocationPermission(context)) {
+            fetchDeviceLocation()
+        }
+    }
+
     Column {
         Text(
             text = "Where are you based?",
             color = Color.White,
-            fontSize = 28.sp,
+            fontSize = 22.sp,
             fontWeight = FontWeight.Bold
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
         Text(
-            text = "We’ll use your location to introduce you to people nearby.",
+            text = "We'll use your location to find people nearby.",
             color = Color.White.copy(alpha = 0.85f),
-            fontSize = 15.sp,
-            lineHeight = 22.sp
+            fontSize = 13.sp,
+            lineHeight = 18.sp
         )
-        Spacer(modifier = Modifier.height(28.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
-        // Your location label
         Text(
             text = "Your location",
             color = Color.White,
-            fontSize = 15.sp,
+            fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold
         )
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Location Card Container with Place icon, TextField, and MyLocation Crosshair
         Surface(

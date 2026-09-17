@@ -2,17 +2,21 @@ package com.mallucupid.app.location
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.Address
 import android.location.Geocoder
 import android.location.Location
+import android.location.LocationManager
 import android.os.Build
+import android.provider.Settings
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import kotlinx.coroutines.suspendCancellableCoroutine
+import java.util.Locale
 import kotlin.coroutines.resume
 
 data class LocationResult(
@@ -21,6 +25,7 @@ data class LocationResult(
     val cityName: String,
     val stateName: String,
     val countryName: String,
+    val countryCode: String,
     val fullLocation: String
 )
 
@@ -31,18 +36,25 @@ object LocationHelper {
                ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
     }
 
-    /**
-     * Requests a FRESH location using FusedLocationProviderClient.
-     * Uses getCurrentLocation() (not getLastLocation) for accuracy.
-     * Returns null if permission denied or location unavailable.
-     */
+    fun isGpsEnabled(context: Context): Boolean {
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        return lm.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
+               lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+    }
+
+    fun openLocationSettings(context: Context) {
+        val intent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        context.startActivity(intent)
+    }
+
     suspend fun getCurrentLocation(context: Context): LocationResult? {
         if (!hasLocationPermission(context)) return null
 
         val fusedClient: FusedLocationProviderClient =
             LocationServices.getFusedLocationProviderClient(context)
 
-        // Request fresh location with high accuracy
         val location = try {
             suspendCancellableCoroutine<Location?> { cont ->
                 val cts = CancellationTokenSource()
@@ -58,8 +70,7 @@ object LocationHelper {
             null
         } ?: return null
 
-        // Reverse geocode to city name
-        val geocoder = Geocoder(context, java.util.Locale.getDefault())
+        val geocoder = Geocoder(context, Locale.getDefault())
         val address = try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 suspendCancellableCoroutine<Address?> { cont ->
@@ -78,8 +89,9 @@ object LocationHelper {
         val cityName = address?.locality ?: address?.subAdminArea ?: address?.subLocality ?: "Unknown"
         val stateName = address?.adminArea ?: ""
         val countryName = address?.countryName ?: ""
+        val countryCode = address?.countryCode ?: ""
         val fullLocation = if (stateName.isNotBlank() && countryName.isNotBlank()) {
-            "$cityName, $stateName, $countryName"
+            "$cityName, $countryName"
         } else {
             cityName
         }
@@ -90,6 +102,7 @@ object LocationHelper {
             cityName = cityName,
             stateName = stateName,
             countryName = countryName,
+            countryCode = countryCode,
             fullLocation = fullLocation
         )
     }
