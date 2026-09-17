@@ -49,8 +49,8 @@ object SupabaseAuth {
                     when {
                         text.contains("already registered", ignoreCase = true) -> "This email is already registered. Try signing in."
                         text.contains("weak", ignoreCase = true) -> "Password is too weak. Use at least 8 characters with a number."
-                        text.contains("invalid", ignoreCase = true) -> "Please check your email and try again."
-                        else -> "Couldn't create your account. Please try again."
+                        text.contains("rate_limit", ignoreCase = true) -> "Too many attempts. Please wait a few minutes and try again."
+                        else -> "Signup failed: $text"
                     }
                 } else null
             }
