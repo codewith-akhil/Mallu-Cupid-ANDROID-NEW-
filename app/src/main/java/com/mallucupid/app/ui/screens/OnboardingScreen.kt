@@ -630,10 +630,10 @@ private fun Step1Gender(
         Text(
             text = "Who are you?",
             color = Color.White,
-            fontSize = 28.sp,
+            fontSize = 22.sp,
             fontWeight = FontWeight.Bold
         )
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         // Identity Dropdown Selector
         Box(modifier = Modifier.fillMaxWidth()) {
@@ -849,19 +849,19 @@ private fun Step2Birthday(
 ) {
     Column {
         Text(
-            text = "When’s your birthday?",
+            text = "When's your birthday?",
             color = Color.White,
-            fontSize = 28.sp,
+            fontSize = 22.sp,
             fontWeight = FontWeight.Bold
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
         Text(
-            text = "We use this to show you age-appropriate matches. Your full birthday stays private.",
+            text = "We use this to show you age-appropriate matches.",
             color = Color.White.copy(alpha = 0.85f),
-            fontSize = 15.sp,
-            lineHeight = 22.sp
+            fontSize = 13.sp,
+            lineHeight = 18.sp
         )
-        Spacer(modifier = Modifier.height(28.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
         Text(
             text = "Date of birth",
@@ -884,52 +884,52 @@ private fun Step2Birthday(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 shape = RoundedCornerShape(14.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = Color.White.copy(alpha = 0.14f),
-                    unfocusedContainerColor = Color.White.copy(alpha = 0.12f),
+                    focusedContainerColor = Color.White.copy(alpha = 0.95f),
+                    unfocusedContainerColor = Color.White.copy(alpha = 0.9f),
                     focusedBorderColor = AccentPink,
                     unfocusedBorderColor = Color.Transparent,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White
+                    focusedTextColor = Color.Black,
+                    unfocusedTextColor = Color.Black
                 ),
-                textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center, fontSize = 17.sp)
+                textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center, fontSize = 16.sp)
             )
 
             OutlinedTextField(
                 value = month,
                 onValueChange = { if (it.length <= 2 && it.all { c -> c.isDigit() }) onMonthChange(it) },
-                placeholder = { Text("MM", color = Color.White.copy(alpha = 0.5f), textAlign = TextAlign.Center) },
+                placeholder = { Text("MM", color = Color.Gray, textAlign = TextAlign.Center) },
                 modifier = Modifier.weight(1f),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 shape = RoundedCornerShape(14.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = Color.White.copy(alpha = 0.14f),
-                    unfocusedContainerColor = Color.White.copy(alpha = 0.12f),
+                    focusedContainerColor = Color.White.copy(alpha = 0.95f),
+                    unfocusedContainerColor = Color.White.copy(alpha = 0.9f),
                     focusedBorderColor = AccentPink,
                     unfocusedBorderColor = Color.Transparent,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White
+                    focusedTextColor = Color.Black,
+                    unfocusedTextColor = Color.Black
                 ),
-                textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center, fontSize = 17.sp)
+                textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center, fontSize = 16.sp)
             )
 
             OutlinedTextField(
                 value = year,
                 onValueChange = { if (it.length <= 4 && it.all { c -> c.isDigit() }) onYearChange(it) },
-                placeholder = { Text("YYYY", color = Color.White.copy(alpha = 0.5f), textAlign = TextAlign.Center) },
+                placeholder = { Text("YYYY", color = Color.Gray, textAlign = TextAlign.Center) },
                 modifier = Modifier.weight(1.4f),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 shape = RoundedCornerShape(14.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = Color.White.copy(alpha = 0.14f),
-                    unfocusedContainerColor = Color.White.copy(alpha = 0.12f),
+                    focusedContainerColor = Color.White.copy(alpha = 0.95f),
+                    unfocusedContainerColor = Color.White.copy(alpha = 0.9f),
                     focusedBorderColor = AccentPink,
                     unfocusedBorderColor = Color.Transparent,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White
+                    focusedTextColor = Color.Black,
+                    unfocusedTextColor = Color.Black
                 ),
-                textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center, fontSize = 17.sp)
+                textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center, fontSize = 16.sp)
             )
         }
 
@@ -1195,22 +1195,22 @@ private fun Step4Photos(
         Text(
             text = "Show your best side.",
             color = Color.White,
-            fontSize = 28.sp,
+            fontSize = 22.sp,
             fontWeight = FontWeight.Bold
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
         Text(
-            text = "Add at least 3 photos. Profiles with 4 or more get more meaningful conversations.",
+            text = "Add at least 3 photos.",
             color = Color.White.copy(alpha = 0.85f),
-            fontSize = 15.sp,
-            lineHeight = 22.sp
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = "Tip: long-press a photo to drag and reorder. The first photo is your Primary.",
-            color = Color.White.copy(alpha = 0.7f),
-            fontSize = 12.sp,
+            fontSize = 13.sp,
             lineHeight = 18.sp
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "Long-press to reorder. First photo is your Primary.",
+            color = Color.White.copy(alpha = 0.7f),
+            fontSize = 11.sp,
+            lineHeight = 16.sp
         )
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -1516,17 +1516,17 @@ private fun Step5Basics(
         Text(
             text = "The basics.",
             color = Color.White,
-            fontSize = 28.sp,
+            fontSize = 22.sp,
             fontWeight = FontWeight.Bold
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
         Text(
             text = "A little detail helps people find a genuine connection.",
             color = Color.White.copy(alpha = 0.85f),
-            fontSize = 15.sp,
-            lineHeight = 22.sp
+            fontSize = 13.sp,
+            lineHeight = 18.sp
         )
-        Spacer(modifier = Modifier.height(28.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
         Text(
             text = "A few words about you",
@@ -1545,9 +1545,9 @@ private fun Step5Basics(
                 value = bio,
                 onValueChange = { if (it.length <= 180) onBioChange(it) },
                 textStyle = TextStyle(
-                    color = Color.White,
-                    fontSize = 15.sp,
-                    lineHeight = 22.sp
+                    color = Color.Black,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp
                 ),
                 cursorBrush = SolidColor(AccentPink),
                 modifier = Modifier
@@ -1557,10 +1557,10 @@ private fun Step5Basics(
                 decorationBox = { innerTextField ->
                     if (bio.isEmpty()) {
                         Text(
-                            text = "Software engineer who loves weekend road trips to the hills, coffee, and acoustic melodies.",
-                            color = Color.White.copy(alpha = 0.45f),
-                            fontSize = 15.sp,
-                            lineHeight = 22.sp
+                            text = "Write a few words about yourself...",
+                            color = Color.Gray,
+                            fontSize = 14.sp,
+                            lineHeight = 20.sp
                         )
                     }
                     innerTextField()
@@ -1590,17 +1590,17 @@ private fun Step6Interests(
         Text(
             text = "What makes you, you?",
             color = Color.White,
-            fontSize = 28.sp,
+            fontSize = 22.sp,
             fontWeight = FontWeight.Bold
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
         Text(
-            text = "Pick at least 3. These become easy conversation starters.",
+            text = "Pick at least 3.",
             color = Color.White.copy(alpha = 0.85f),
-            fontSize = 15.sp,
-            lineHeight = 22.sp
+            fontSize = 13.sp,
+            lineHeight = 18.sp
         )
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
         // Chip flow layout
         val chunkedInterests = interestOptions.chunked(3)
@@ -1670,17 +1670,17 @@ private fun Step7Goal(
         Text(
             text = "What are you looking for?",
             color = Color.White,
-            fontSize = 28.sp,
+            fontSize = 22.sp,
             fontWeight = FontWeight.Bold
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
         Text(
-            text = "There’s no wrong answer. Being clear helps everyone.",
+            text = "Being clear helps everyone.",
             color = Color.White.copy(alpha = 0.85f),
-            fontSize = 15.sp,
-            lineHeight = 22.sp
+            fontSize = 13.sp,
+            lineHeight = 18.sp
         )
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
         goalOptions.forEach { goal ->
             ChoiceCard(
@@ -1706,17 +1706,17 @@ private fun Step8Prompts(
         Text(
             text = "Give them a way in.",
             color = Color.White,
-            fontSize = 28.sp,
+            fontSize = 22.sp,
             fontWeight = FontWeight.Bold
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(6.dp))
         Text(
-            text = "Answer two quick prompts in your own words.",
+            text = "Answer two quick prompts.",
             color = Color.White.copy(alpha = 0.85f),
-            fontSize = 15.sp,
-            lineHeight = 22.sp
+            fontSize = 13.sp,
+            lineHeight = 18.sp
         )
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
         prompts.forEachIndexed { index, prompt ->
             var expandedDropdown by remember { mutableStateOf(false) }
