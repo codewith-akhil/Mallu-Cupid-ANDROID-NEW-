@@ -280,3 +280,21 @@ data class ReactionInsert(
     @Json(name = "user_id") val userId: String,
     val emoji: String,
 )
+
+// ---------- Subscriptions ----------
+
+@JsonClass(generateAdapter = true)
+data class SubscriptionDto(
+    val id: String? = null,
+    @Json(name = "user_id") val userId: String? = null,
+    val plan: String? = null,
+    @Json(name = "plan_name") val planName: String? = null,
+    val status: String? = null,
+    @Json(name = "txn_id") val txnId: String? = null,
+    val amount: Double? = null,
+    @Json(name = "duration_days") val durationDays: Int? = null,
+    @Json(name = "started_at") val startedAt: String? = null,
+    @Json(name = "expires_at") val expiresAt: String? = null,
+    @Json(name = "google_purchase_token") val googlePurchaseToken: String? = null,
+    @Json(name = "google_product_id") val googleProductId: String? = null,
+)

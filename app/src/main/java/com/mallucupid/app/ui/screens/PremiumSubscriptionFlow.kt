@@ -1,12 +1,8 @@
 package com.mallucupid.app.ui.screens
 
+import android.app.Activity
 import android.widget.Toast
-import androidx.compose.animation.*
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -19,23 +15,71 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.android.billingclient.api.*
+import com.mallucupid.app.data.remote.SessionManager
+import com.mallucupid.app.data.remote.SupabaseRepository
 import com.mallucupid.app.ui.theme.*
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import java.time.OffsetDateTime
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 
+/**
+ * Premium subscription flow backed by Google Play Billing.
+ *
+ * 3 plans (weekly / monthly / yearly), each unlocking the same 4 perks.
+ * Flow:
+ *   1. OFFER      — pick a plan, tap "Continue to Payment"
+ *   2. PROCESSING — Google Play Billing sheet is launched; verify the returned
+ *                   Purchase via SupabaseRepository.verifyPurchase()
+ *   3. SUCCESS    — Pro activated; show expiry + unlocked features
+ *
+ * No Razorpay, no fake delays, no hardcoded order IDs. The Google Play purchase
+ * token + orderId are forwarded to the `verify-purchase` edge function, which
+ * persists the subscription row and returns `{ ok: true }` on success.
+ */
 enum class PremiumFlowStep {
     OFFER,
-    PAYMENT_GATEWAY,
-    PAYMENT_VERIFICATION,
-    PAYMENT_SUCCESS
+    PROCESSING,
+    SUCCESS,
 }
+
+private data class PremiumPlan(
+    val productId: String,
+    val name: String,
+    val priceLabel: String,
+    val durationLabel: String,
+    val durationDays: Int,
+    val isBestValue: Boolean,
+)
+
+private val PremiumPlans: List<PremiumPlan> = listOf(
+    PremiumPlan("weekly_pro", "Weekly Pro", "₹49", "7 days", 7, isBestValue = false),
+    PremiumPlan("monthly_pro", "Monthly Pro", "₹99", "30 days", 30, isBestValue = false),
+    PremiumPlan("yearly_pro", "Yearly Pro", "₹799", "365 days", 365, isBestValue = true),
+)
+
+private data class PremiumPerk(
+    val icon: ImageVector,
+    val tint: Color,
+    val title: String,
+    val description: String,
+)
+
+private val PremiumPerks: List<PremiumPerk> = listOf(
+    PremiumPerk(Icons.Default.Favorite, NopeCoral, "Unlimited Likes", "Swipe on as many nearby profiles as you like with zero daily limits."),
+    PremiumPerk(Icons.Default.Visibility, TinderGold, "See Who Likes You", "Unblur every incoming like and match instantly without waiting."),
+    PremiumPerk(Icons.Default.ChatBubble, SuperBlue, "Unlimited Chat", "Message and share photos freely with any match, anytime."),
+    PremiumPerk(Icons.Default.Replay, DashboardPeach, "Unlimited Rewinds", "Accidentally swiped left? Undo your last swipe with one tap."),
+)
 
 @Composable
 fun PremiumSubscriptionFlow(
@@ -43,39 +87,128 @@ fun PremiumSubscriptionFlow(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
     var currentStep by remember { mutableStateOf(PremiumFlowStep.OFFER) }
-    var selectedPaymentMethod by remember { mutableStateOf("GPay") } // GPay, PhonePe, Paytm, Cards, NetBanking
-    var upiIdInput by remember { mutableStateOf("user@okhdfcbank") }
+    var selectedPlan by remember { mutableStateOf<PremiumPlan?>(null) }
+    var isProcessing by remember { mutableStateOf(false) }
+    var activatedPlan by remember { mutableStateOf<PremiumPlan?>(null) }
+    var activatedExpiry by remember { mutableStateOf<String?>(null) }
 
-    // Verification progress states
-    var verificationStatus by remember { mutableStateOf("Connecting to UPI Network...") }
-    var verificationProgress by remember { mutableFloatStateOf(0.15f) }
+    // Handler invoked by the (remembered, stable) PurchasesUpdatedListener.
+    // It is recreated on every recomposition so it always reads the latest
+    // selectedPlan; rememberUpdatedState gives us a stable State<T> slot the
+    // listener can dereference at callback time.
+    val handlePurchases: (BillingResult, List<Purchase>?) -> Unit = { billingResult, purchases ->
+        handlePurchaseResult(
+            billingResult = billingResult,
+            purchases = purchases,
+            selectedPlan = selectedPlan,
+            scope = scope,
+            onError = { message ->
+                isProcessing = false
+                currentStep = PremiumFlowStep.OFFER
+                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            },
+            onVerified = { plan, expiry ->
+                activatedPlan = plan
+                activatedExpiry = expiry
+                isProcessing = false
+                currentStep = PremiumFlowStep.SUCCESS
+            },
+        )
+    }
+    val handlerState = rememberUpdatedState(handlePurchases)
 
-    LaunchedEffect(currentStep) {
-        if (currentStep == PremiumFlowStep.PAYMENT_VERIFICATION) {
-            verificationProgress = 0.25f
-            verificationStatus = "Requesting bank authorization..."
-            delay(1000)
+    val purchasesListener = remember {
+        PurchasesUpdatedListener { billingResult, purchases ->
+            handlerState.value.invoke(billingResult, purchases)
+        }
+    }
 
-            verificationProgress = 0.65f
-            verificationStatus = "Verifying 256-bit token with NPCI..."
-            delay(1200)
+    // Billing client lifecycle — connect when the screen opens, disconnect on leave.
+    var billingClient by remember { mutableStateOf<BillingClient?>(null) }
+    DisposableEffect(Unit) {
+        val client = BillingClient.newBuilder(context)
+            .enablePendingPurchases()
+            .setListener(purchasesListener)
+            .build()
+        billingClient = client
+        client.startConnection(object : BillingClientStateListener {
+            override fun onBillingSetupFinished(billingResult: BillingResult) {
+                // Connection ready. Product details are queried on demand when
+                // the user taps "Continue to Payment".
+            }
+            override fun onBillingServiceDisconnected() {
+                // Play Billing service dropped — next checkout attempt will need a
+                // reconnect, which startConnection handles when retried.
+            }
+        })
+        onDispose {
+            if (client.isReady) client.endConnection()
+        }
+    }
 
-            verificationProgress = 0.95f
-            verificationStatus = "Authorizing ₹49.00 debit from account..."
-            delay(800)
-
-            verificationProgress = 1.0f
-            verificationStatus = "Payment verified successfully!"
-            delay(400)
-            currentStep = PremiumFlowStep.PAYMENT_SUCCESS
+    fun startCheckout(plan: PremiumPlan) {
+        val client = billingClient
+        if (client == null || !client.isReady) {
+            Toast.makeText(context, "Billing service is unavailable. Please try again.", Toast.LENGTH_LONG).show()
+            return
+        }
+        selectedPlan = plan
+        isProcessing = true
+        currentStep = PremiumFlowStep.PROCESSING
+        val queryParams = QueryProductDetailsParams.newBuilder()
+            .setProductList(
+                listOf(
+                    QueryProductDetailsParams.Product.newBuilder()
+                        .setProductId(plan.productId)
+                        .setProductType(BillingClient.ProductType.SUBS)
+                        .build()
+                )
+            )
+            .build()
+        client.queryProductDetailsAsync(queryParams) { result, productDetailsList ->
+            if (result.responseCode != BillingClient.BillingResponseCode.OK || productDetailsList.isEmpty()) {
+                isProcessing = false
+                currentStep = PremiumFlowStep.OFFER
+                Toast.makeText(context, "Unable to load plan details. Please try again.", Toast.LENGTH_LONG).show()
+                return@queryProductDetailsAsync
+            }
+            val productDetails = productDetailsList.first()
+            val offerToken = productDetails.subscriptionOfferDetails
+                ?.firstOrNull()
+                ?.offerToken
+            val productParamsBuilder = BillingFlowParams.ProductDetailsParams.newBuilder()
+                .setProductDetails(productDetails)
+            if (!offerToken.isNullOrEmpty()) {
+                productParamsBuilder.setOfferToken(offerToken)
+            }
+            val flowParams = BillingFlowParams.newBuilder()
+                .setProductDetailsParamsList(listOf(productParamsBuilder.build()))
+                .build()
+            val activity = context as? Activity
+            if (activity == null) {
+                isProcessing = false
+                currentStep = PremiumFlowStep.OFFER
+                Toast.makeText(context, "Unable to launch payment flow.", Toast.LENGTH_LONG).show()
+                return@queryProductDetailsAsync
+            }
+            val launchResult = client.launchBillingFlow(activity, flowParams)
+            if (launchResult.responseCode != BillingClient.BillingResponseCode.OK) {
+                isProcessing = false
+                currentStep = PremiumFlowStep.OFFER
+                Toast.makeText(context, "Unable to start payment. Please try again.", Toast.LENGTH_LONG).show()
+            }
+            // Otherwise: onPurchasesUpdated fires via purchasesListener with the
+            // final result (success, cancellation, or failure).
         }
     }
 
     Scaffold(
         containerColor = DashboardBg,
         topBar = {
-            if (currentStep != PremiumFlowStep.PAYMENT_VERIFICATION) {
+            if (currentStep != PremiumFlowStep.PROCESSING) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -84,12 +217,10 @@ fun PremiumSubscriptionFlow(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = {
-                        if (currentStep == PremiumFlowStep.OFFER) {
-                            onBack()
-                        } else if (currentStep == PremiumFlowStep.PAYMENT_GATEWAY) {
-                            currentStep = PremiumFlowStep.OFFER
-                        } else if (currentStep == PremiumFlowStep.PAYMENT_SUCCESS) {
-                            onSuccess()
+                        when (currentStep) {
+                            PremiumFlowStep.OFFER -> onBack()
+                            PremiumFlowStep.SUCCESS -> onSuccess()
+                            PremiumFlowStep.PROCESSING -> { /* no-op while billing sheet is up */ }
                         }
                     }) {
                         Icon(
@@ -98,14 +229,16 @@ fun PremiumSubscriptionFlow(
                             tint = DashboardCream
                         )
                     }
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.Default.WorkspacePremium,
+                        contentDescription = null,
+                        tint = TinderGold,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = when (currentStep) {
-                            PremiumFlowStep.OFFER -> "Mallu Cupid Premium"
-                            PremiumFlowStep.PAYMENT_GATEWAY -> "Secure Payment Gateway"
-                            PremiumFlowStep.PAYMENT_VERIFICATION -> "Processing Payment"
-                            PremiumFlowStep.PAYMENT_SUCCESS -> "Subscription Activated"
-                        },
+                        text = "MalluCupid Pro",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
                         color = DashboardCream
@@ -114,505 +247,263 @@ fun PremiumSubscriptionFlow(
             }
         }
     ) { innerPadding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
             when (currentStep) {
-                // ==========================================
-                // 1. OFFER SCREEN (₹49 INR PER WEEK)
-                // ==========================================
-                PremiumFlowStep.OFFER -> {
-                    val scrollState = rememberScrollState()
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(scrollState)
-                            .padding(horizontal = 20.dp, vertical = 10.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        // Premium Golden / Terracotta Card Banner
-                        Surface(
-                            shape = RoundedCornerShape(24.dp),
-                            color = Color(0xFF2E221B),
-                            border = BorderStroke(1.5.dp, DashboardTerracotta),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(20.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Surface(
-                                    shape = CircleShape,
-                                    color = DashboardTerracotta,
-                                    modifier = Modifier.size(64.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(
-                                            imageVector = Icons.Default.WorkspacePremium,
-                                            contentDescription = null,
-                                            tint = Color.White,
-                                            modifier = Modifier.size(36.dp)
-                                        )
-                                    }
-                                }
+                PremiumFlowStep.OFFER -> OfferScreen(
+                    selectedPlan = selectedPlan,
+                    onSelectPlan = { selectedPlan = it },
+                    onContinue = { selectedPlan?.let { startCheckout(it) } },
+                )
+                PremiumFlowStep.PROCESSING -> ProcessingScreen()
+                PremiumFlowStep.SUCCESS -> SuccessScreen(
+                    plan = activatedPlan,
+                    expiryLabel = activatedExpiry,
+                    onSuccess = onSuccess,
+                )
+            }
+        }
+    }
+}
 
-                                Spacer(modifier = Modifier.height(14.dp))
+// ---------------------------------------------------------------------------
+// Screen 1 — Plan / Offer selection
+// ---------------------------------------------------------------------------
 
-                                Text(
-                                    text = "MALLU CUPID PREMIUM",
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.Black,
-                                    letterSpacing = 1.sp,
-                                    color = DashboardCream
-                                )
-
-                                Spacer(modifier = Modifier.height(4.dp))
-
-                                Text(
-                                    text = "#1 Dating Experience",
-                                    fontSize = 13.sp,
-                                    color = DashboardPeach
-                                )
-
-                                Spacer(modifier = Modifier.height(16.dp))
-
-                                // Price tag: 49 INR PER WEEK
-                                Surface(
-                                    shape = RoundedCornerShape(50),
-                                    color = DashboardTerracotta.copy(alpha = 0.2f),
-                                    border = BorderStroke(1.dp, DashboardTerracotta)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = "₹49",
-                                            fontSize = 26.sp,
-                                            fontWeight = FontWeight.Black,
-                                            color = DashboardCream
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = "/ WEEK",
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = DashboardPeach
-                                        )
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.height(8.dp))
-
-                                Text(
-                                    text = "Special introductory pricing · Cancel anytime",
-                                    fontSize = 11.sp,
-                                    color = DashboardNavMuted
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(20.dp))
-
-                        // Features requested: UNLIMITED LIKE, SEE WHO LIKES U, UNLIMITED CHAT, UNLIMITED REWIND
-                        Text(
-                            text = "PREMIUM PERKS INCLUDED",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = DashboardNavMuted,
-                            modifier = Modifier.align(Alignment.Start)
+@Composable
+private fun OfferScreen(
+    selectedPlan: PremiumPlan?,
+    onSelectPlan: (PremiumPlan) -> Unit,
+    onContinue: () -> Unit,
+) {
+    val scrollState = rememberScrollState()
+    Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(scrollState)
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+        ) {
+            // Hero header
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = DashboardTerracotta.copy(alpha = 0.15f),
+                    border = BorderStroke(1.5.dp, DashboardTerracotta),
+                    modifier = Modifier.size(72.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.WorkspacePremium,
+                            contentDescription = null,
+                            tint = TinderGold,
+                            modifier = Modifier.size(40.dp)
                         )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            PremiumPerkCard(
-                                icon = Icons.Default.Favorite,
-                                iconColor = NopeCoral,
-                                title = "Unlimited Likes",
-                                description = "Swipe on as many nearby profiles as your heart desires with zero daily limits."
-                            )
-                            PremiumPerkCard(
-                                icon = Icons.Default.Visibility,
-                                iconColor = RewindGold,
-                                title = "See Who Likes You",
-                                description = "Unblur all incoming likes and match instantly without having to wait in the feed."
-                            )
-                            PremiumPerkCard(
-                                icon = Icons.Default.ChatBubble,
-                                iconColor = SuperBlue,
-                                title = "Unlimited Chat",
-                                description = "Message and video/photo share freely with any match nearby anytime."
-                            )
-                            PremiumPerkCard(
-                                icon = Icons.Default.Replay,
-                                iconColor = DashboardPeach,
-                                title = "Unlimited Rewind",
-                                description = "Accidentally swiped left on someone special? Undo your swipe with 1 tap."
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        // ACTIVATE BUTTON -> PAYMENT GATEWAY
-                        Button(
-                            onClick = {
-                                currentStep = PremiumFlowStep.PAYMENT_GATEWAY
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = DashboardTerracotta,
-                                contentColor = Color.White
-                            ),
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(54.dp)
-                        ) {
-                            Text(
-                                text = "Activate Now · ₹49 / Week",
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
                     }
                 }
+                Spacer(modifier = Modifier.height(14.dp))
+                Text(
+                    text = "MalluCupid Pro",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Black,
+                    color = DashboardCream
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Unlock the full MalluCupid experience",
+                    fontSize = 13.sp,
+                    color = DashboardPeach,
+                    textAlign = TextAlign.Center
+                )
+            }
 
-                // ==========================================
-                // 2. PAYMENT GATEWAY (UPI, GPay, Cards)
-                // ==========================================
-                PremiumFlowStep.PAYMENT_GATEWAY -> {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 20.dp, vertical = 10.dp)
-                    ) {
-                        // Order Summary Card
-                        Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = DashboardCard,
-                            border = BorderStroke(1.dp, Color(0xFF42342D)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(16.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column {
-                                    Text(
-                                        text = "Mallu Cupid Premium (1 Week)",
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = DashboardCream
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = "Order ID: MC_PRM_9082",
-                                        fontSize = 12.sp,
-                                        color = DashboardNavMuted
-                                    )
-                                }
-                                Text(
-                                    text = "₹49.00",
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.Black,
-                                    color = DashboardCream
-                                )
-                            }
-                        }
+            Spacer(modifier = Modifier.height(24.dp))
 
-                        Spacer(modifier = Modifier.height(20.dp))
+            Text(
+                text = "CHOOSE YOUR PLAN",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = DashboardNavMuted,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                PremiumPlans.forEach { plan ->
+                    PremiumPlanCard(
+                        plan = plan,
+                        isSelected = selectedPlan?.productId == plan.productId,
+                        onSelect = { onSelectPlan(plan) },
+                    )
+                }
+            }
 
-                        Text(
-                            text = "SELECT PAYMENT OPTION",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = DashboardNavMuted
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Text(
+                text = "ALL PLANS INCLUDE",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = DashboardNavMuted,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                PremiumPerks.forEach { perk ->
+                    PremiumPerkCard(
+                        icon = perk.icon,
+                        iconColor = perk.tint,
+                        title = perk.title,
+                        description = perk.description,
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // Fixed bottom: CTA + terms
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+        ) {
+            Button(
+                onClick = onContinue,
+                enabled = selectedPlan != null,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = DashboardTerracotta,
+                    contentColor = Color.White,
+                    disabledContainerColor = DashboardTerracotta.copy(alpha = 0.35f),
+                    disabledContentColor = DashboardCream.copy(alpha = 0.5f),
+                ),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(54.dp)
+            ) {
+                val plan = selectedPlan
+                Text(
+                    text = if (plan != null)
+                        "Continue to Payment · ${plan.priceLabel}"
+                    else
+                        "Continue to Payment",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = "Payment will be charged to your Google Play account. Subscriptions auto-renew unless cancelled at least 24 hours before the end of the current period.",
+                fontSize = 11.sp,
+                color = DashboardNavMuted,
+                lineHeight = 15.sp,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+@Composable
+private fun PremiumPlanCard(
+    plan: PremiumPlan,
+    isSelected: Boolean,
+    onSelect: () -> Unit,
+) {
+    Box {
+        Surface(
+            onClick = onSelect,
+            shape = RoundedCornerShape(16.dp),
+            color = if (isSelected) DashboardTerracotta.copy(alpha = 0.10f) else DashboardCard,
+            border = BorderStroke(
+                width = if (isSelected) 2.dp else 1.dp,
+                color = if (isSelected) DashboardTerracotta else Color(0xFF42342D)
+            ),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = plan.name,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = DashboardCream
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = plan.durationLabel,
+                        fontSize = 13.sp,
+                        color = DashboardPeach
+                    )
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = plan.priceLabel,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Black,
+                        color = DashboardCream
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = if (isSelected) DashboardTerracotta else Color(0xFF3A2E28),
+                        border = BorderStroke(
+                            1.dp,
+                            if (isSelected) Color.Transparent else Color(0xFF4D3D35)
                         )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Payment Methods
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            PaymentOptionTile(
-                                title = "Google Pay (UPI)",
-                                subtitle = "Instant checkout with GPay app",
-                                isSelected = selectedPaymentMethod == "GPay",
-                                onClick = { selectedPaymentMethod = "GPay" }
-                            )
-                            PaymentOptionTile(
-                                title = "PhonePe",
-                                subtitle = "Pay via UPI PIN on PhonePe",
-                                isSelected = selectedPaymentMethod == "PhonePe",
-                                onClick = { selectedPaymentMethod = "PhonePe" }
-                            )
-                            PaymentOptionTile(
-                                title = "Paytm / Any UPI ID",
-                                subtitle = "BHIM UPI, Cred, or custom VPA",
-                                isSelected = selectedPaymentMethod == "Paytm",
-                                onClick = { selectedPaymentMethod = "Paytm" }
-                            )
-                            PaymentOptionTile(
-                                title = "Debit / Credit Card",
-                                subtitle = "Visa, MasterCard, RuPay",
-                                isSelected = selectedPaymentMethod == "Cards",
-                                onClick = { selectedPaymentMethod = "Cards" }
-                            )
-                        }
-
-                        if (selectedPaymentMethod == "Paytm") {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            OutlinedTextField(
-                                value = upiIdInput,
-                                onValueChange = { upiIdInput = it },
-                                label = { Text("Enter UPI ID / VPA") },
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = DashboardTerracotta,
-                                    unfocusedBorderColor = Color(0xFF42342D),
-                                    focusedTextColor = DashboardCream,
-                                    unfocusedTextColor = DashboardCream
-                                )
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.weight(1f))
-
-                        // Security Badge
+                    ) {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Lock,
-                                contentDescription = null,
-                                tint = SuperBlue,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "256-Bit SSL Encrypted Indian Payment Gateway",
-                                fontSize = 11.sp,
-                                color = DashboardNavMuted
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Proceed to Payment Verification
-                        Button(
-                            onClick = {
-                                currentStep = PremiumFlowStep.PAYMENT_VERIFICATION
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = DashboardTerracotta),
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(52.dp)
-                        ) {
-                            Text(
-                                text = "Pay ₹49.00 Securely",
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                    }
-                }
-
-                // ==========================================
-                // 3. PAYMENT VERIFICATION (Processing Gateway)
-                // ==========================================
-                PremiumFlowStep.PAYMENT_VERIFICATION -> {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = Color(0xFF261E1A),
-                            border = BorderStroke(2.dp, DashboardTerracotta),
-                            modifier = Modifier.size(110.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator(
-                                    progress = { verificationProgress },
-                                    modifier = Modifier.size(90.dp),
-                                    color = DashboardTerracotta,
-                                    trackColor = Color(0xFF42342D),
-                                    strokeWidth = 4.dp
-                                )
+                            if (isSelected) {
                                 Icon(
-                                    imageVector = Icons.Default.CurrencyRupee,
+                                    imageVector = Icons.Default.Check,
                                     contentDescription = null,
-                                    tint = DashboardCream,
-                                    modifier = Modifier.size(36.dp)
+                                    tint = Color.White,
+                                    modifier = Modifier.size(14.dp)
                                 )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(30.dp))
-
-                        Text(
-                            text = "Verifying ₹49.00 Payment",
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = DashboardCream
-                        )
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Text(
-                            text = verificationStatus,
-                            fontSize = 14.sp,
-                            color = DashboardPeach,
-                            fontWeight = FontWeight.SemiBold,
-                            textAlign = TextAlign.Center
-                        )
-
-                        Spacer(modifier = Modifier.height(20.dp))
-
-                        LinearProgressIndicator(
-                            progress = { verificationProgress },
-                            modifier = Modifier
-                                .fillMaxWidth(0.6f)
-                                .height(5.dp)
-                                .clip(RoundedCornerShape(3.dp)),
-                            color = DashboardTerracotta,
-                            trackColor = Color(0xFF382D27)
-                        )
-
-                        Spacer(modifier = Modifier.height(30.dp))
-
-                        Text(
-                            text = "Please do not press Back or switch apps while we verify your transaction with the bank.",
-                            fontSize = 12.sp,
-                            color = DashboardNavMuted,
-                            textAlign = TextAlign.Center,
-                            lineHeight = 18.sp
-                        )
-                    }
-                }
-
-                // ==========================================
-                // 4. SUCCESS SCREEN
-                // ==========================================
-                PremiumFlowStep.PAYMENT_SUCCESS -> {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Spacer(modifier = Modifier.height(30.dp))
-
-                        Surface(
-                            shape = CircleShape,
-                            color = Color(0xFF1E3A2F),
-                            border = BorderStroke(3.dp, Color(0xFF4CAF50)),
-                            modifier = Modifier.size(110.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.CheckCircle,
-                                    contentDescription = "Success",
-                                    tint = Color(0xFF4CAF50),
-                                    modifier = Modifier.size(64.dp)
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        Text(
-                            text = "Payment Successful!",
-                            fontSize = 24.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = DashboardCream
-                        )
-
-                        Spacer(modifier = Modifier.height(6.dp))
-
-                        Text(
-                            text = "₹49.00 paid · Transaction ID: MC_UPI_839210",
-                            fontSize = 13.sp,
-                            color = DashboardPeach
-                        )
-
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = DashboardCard,
-                            border = BorderStroke(1.dp, Color(0xFF42342D)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.padding(16.dp)) {
+                                Spacer(modifier = Modifier.width(4.dp))
                                 Text(
-                                    text = "MALLU CUPID PREMIUM ACTIVATED",
-                                    fontSize = 14.sp,
+                                    text = "Selected",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            } else {
+                                Text(
+                                    text = "Subscribe",
+                                    fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = DashboardCream
                                 )
-                                Spacer(modifier = Modifier.height(10.dp))
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFF4CAF50), modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Unlimited Likes activated", fontSize = 13.sp, color = DashboardMutedBeige)
-                                }
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFF4CAF50), modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("See Who Likes You unlocked", fontSize = 13.sp, color = DashboardMutedBeige)
-                                }
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFF4CAF50), modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Unlimited Chat & Media Sharing active", fontSize = 13.sp, color = DashboardMutedBeige)
-                                }
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFF4CAF50), modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Unlimited Rewinds ready to use", fontSize = 13.sp, color = DashboardMutedBeige)
-                                }
                             }
                         }
-
-                        Spacer(modifier = Modifier.weight(1f))
-
-                        Button(
-                            onClick = onSuccess,
-                            colors = ButtonDefaults.buttonColors(containerColor = DashboardTerracotta),
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(52.dp)
-                        ) {
-                            Text(
-                                text = "Start Exploring with Premium",
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(20.dp))
                     }
                 }
+            }
+        }
+        if (plan.isBestValue) {
+            Surface(
+                shape = RoundedCornerShape(50),
+                color = TinderGold,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+            ) {
+                Text(
+                    text = "Best Value",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = DashboardBg,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
             }
         }
     }
@@ -620,7 +511,7 @@ fun PremiumSubscriptionFlow(
 
 @Composable
 private fun PremiumPerkCard(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     iconColor: Color,
     title: String,
     description: String
@@ -669,46 +560,256 @@ private fun PremiumPerkCard(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Screen 2 — Processing (Google Play Billing sheet is up)
+// ---------------------------------------------------------------------------
+
 @Composable
-private fun PaymentOptionTile(
-    title: String,
-    subtitle: String,
-    isSelected: Boolean,
-    onClick: () -> Unit
-) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(12.dp),
-        color = if (isSelected) Color(0xFF382A24) else Color(0xFF261E1A),
-        border = BorderStroke(1.dp, if (isSelected) DashboardTerracotta else Color(0xFF42342D)),
-        modifier = Modifier.fillMaxWidth()
+private fun ProcessingScreen() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
-        Row(
-            modifier = Modifier.padding(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+        Surface(
+            shape = CircleShape,
+            color = Color(0xFF261E1A),
+            border = BorderStroke(2.dp, DashboardTerracotta),
+            modifier = Modifier.size(110.dp)
         ) {
-            Column {
-                Text(
-                    text = title,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = DashboardCream
+            Box(contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(80.dp),
+                    color = DashboardTerracotta,
+                    trackColor = Color(0xFF42342D),
+                    strokeWidth = 4.dp
                 )
+                Icon(
+                    imageVector = Icons.Default.WorkspacePremium,
+                    contentDescription = null,
+                    tint = DashboardCream,
+                    modifier = Modifier.size(32.dp)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(28.dp))
+        Text(
+            text = "Processing payment...",
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Bold,
+            color = DashboardCream
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "Please complete the Google Play purchase prompt. Don't close this screen while the transaction is in progress.",
+            fontSize = 13.sp,
+            color = DashboardPeach,
+            textAlign = TextAlign.Center,
+            lineHeight = 18.sp
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Screen 3 — Success
+// ---------------------------------------------------------------------------
+
+@Composable
+private fun SuccessScreen(
+    plan: PremiumPlan?,
+    expiryLabel: String?,
+    onSuccess: () -> Unit,
+) {
+    val scrollState = rememberScrollState()
+    Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(scrollState)
+                .padding(horizontal = 24.dp, vertical = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Surface(
+                shape = CircleShape,
+                color = TinderGreen.copy(alpha = 0.15f),
+                border = BorderStroke(3.dp, TinderGreen),
+                modifier = Modifier.size(110.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = "Success",
+                        tint = TinderGreen,
+                        modifier = Modifier.size(64.dp)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(22.dp))
+            Text(
+                text = "MalluCupid Pro Activated!",
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
+                color = DashboardCream,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            if (plan != null) {
                 Text(
-                    text = subtitle,
-                    fontSize = 11.sp,
+                    text = "${plan.name} · ${plan.priceLabel}",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = DashboardPeach
+                )
+            }
+            if (!expiryLabel.isNullOrEmpty()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Valid until $expiryLabel",
+                    fontSize = 13.sp,
                     color = DashboardNavMuted
                 )
             }
-            RadioButton(
-                selected = isSelected,
-                onClick = onClick,
-                colors = RadioButtonDefaults.colors(
-                    selectedColor = DashboardTerracotta,
-                    unselectedColor = DashboardNavMuted
-                )
-            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = DashboardCard,
+                border = BorderStroke(1.dp, Color(0xFF42342D)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "UNLOCKED FEATURES",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = DashboardNavMuted
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    PremiumPerks.forEach { perk ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 5.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = null,
+                                tint = TinderGreen,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = perk.title,
+                                fontSize = 14.sp,
+                                color = DashboardMutedBeige
+                            )
+                        }
+                    }
+                }
+            }
         }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp, vertical = 12.dp)
+        ) {
+            Button(
+                onClick = onSuccess,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = DashboardTerracotta,
+                    contentColor = Color.White
+                ),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(54.dp)
+            ) {
+                Text(
+                    text = "Start Exploring with Pro",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Billing result handler (reads latest selectedPlan via rememberUpdatedState)
+// ---------------------------------------------------------------------------
+
+private fun handlePurchaseResult(
+    billingResult: BillingResult,
+    purchases: List<Purchase>?,
+    selectedPlan: PremiumPlan?,
+    scope: CoroutineScope,
+    onError: (String) -> Unit,
+    onVerified: (PremiumPlan, String) -> Unit,
+) {
+    if (billingResult.responseCode != BillingClient.BillingResponseCode.OK) {
+        val msg = when (billingResult.responseCode) {
+            BillingClient.BillingResponseCode.USER_CANCELED -> "Payment cancelled. You were not charged."
+            BillingClient.BillingResponseCode.NETWORK_ERROR -> "Network error. Please check your connection and try again."
+            BillingClient.BillingResponseCode.ITEM_UNAVAILABLE -> "This plan is currently unavailable."
+            BillingClient.BillingResponseCode.DEVELOPER_ERROR -> "Payment configuration error. Please contact support."
+            BillingClient.BillingResponseCode.ERROR -> "Payment failed. Please try again."
+            else -> "Payment failed. Please try again."
+        }
+        onError(msg)
+        return
+    }
+    val purchase = purchases?.firstOrNull()
+    if (purchase == null) {
+        onError("No purchase returned. Please try again.")
+        return
+    }
+    val plan = selectedPlan
+    if (plan == null) {
+        onError("No plan selected. Please try again.")
+        return
+    }
+    scope.launch {
+        val userId = SessionManager.current()?.userId.orEmpty()
+        val verified = runCatching {
+            SupabaseRepository.verifyPurchase(
+                userId = userId,
+                productId = plan.productId,
+                purchaseToken = purchase.purchaseToken,
+                orderId = purchase.orderId,
+            )
+        }.getOrDefault(false)
+        if (!verified) {
+            onError("Payment verification failed. Please try again or contact support.")
+            return@launch
+        }
+        // Fetch the real expiry from the DB; fall back to a local estimate
+        // derived from the plan duration if the lookup fails.
+        val expiry = runCatching {
+            SupabaseRepository.getActiveSubscription(userId)?.expiresAt
+        }.getOrNull()?.let(::formatExpiryIso) ?: formatExpiryDays(plan.durationDays)
+        onVerified(plan, expiry)
+    }
+}
+
+private fun formatExpiryIso(iso: String): String {
+    return try {
+        OffsetDateTime.parse(iso).format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM))
+    } catch (e: Exception) {
+        iso.take(10)
+    }
+}
+
+private fun formatExpiryDays(days: Int): String {
+    return try {
+        OffsetDateTime.now().plusDays(days.toLong())
+            .format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM))
+    } catch (e: Exception) {
+        ""
     }
 }

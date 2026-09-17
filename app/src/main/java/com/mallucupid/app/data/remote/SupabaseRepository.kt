@@ -534,6 +534,58 @@ object SupabaseRepository {
         }
     }
 
+    // ---------- Subscriptions ----------
+
+    /** Checks if user has an active Pro subscription. Returns the expiry date or null. */
+    suspend fun getActiveSubscription(userId: String): SubscriptionDto? = withContext(Dispatchers.IO) {
+        val req = Request.Builder()
+            .url("${SupabaseConfig.REST_BASE}/subscriptions?user_id=eq.$userId&status=eq.active&order=expires_at.desc&limit=1")
+            .get().build()
+        SupabaseClient.http.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) return@use null
+            val text = resp.body?.string().orEmpty()
+            runCatching {
+                val type = com.squareup.moshi.Types.newParameterizedType(List::class.java, SubscriptionDto::class.java)
+                val adapter = SupabaseClient.moshi.adapter<List<SubscriptionDto>>(type)
+                val list = adapter.fromJson(text).orEmpty()
+                list.firstOrNull()
+            }.getOrNull()
+        }
+    }
+
+    /** Verifies a Google Play purchase with the server + saves subscription. Returns true on success. */
+    suspend fun verifyPurchase(
+        userId: String, productId: String, purchaseToken: String, orderId: String?
+    ): Boolean = withContext(Dispatchers.IO) {
+        val body = reqAdapter.toJson(mapOf(
+            "user_id" to userId,
+            "product_id" to productId,
+            "purchase_token" to purchaseToken,
+            "order_id" to (orderId ?: "")
+        ))
+        val req = Request.Builder()
+            .url("${SupabaseConfig.FUNCTIONS_BASE}/verify-purchase")
+            .post(body.toRequestBody(json))
+            .build()
+        SupabaseClient.http.newCall(req).execute().use { resp ->
+            resp.isSuccessful && runCatching {
+                val text = resp.body?.string().orEmpty()
+                val parsed = SupabaseClient.moshi.adapter(Map::class.java).fromJson(text)
+                parsed?.get("ok") == true
+            }.getOrDefault(false)
+        }
+    }
+
+    /** Convenience: is the user a Pro subscriber? */
+    suspend fun isPro(userId: String): Boolean = withContext(Dispatchers.IO) {
+        val sub = getActiveSubscription(userId) ?: return@withContext false
+        val expiresAt = sub.expiresAt ?: return@withContext false
+        // Parse ISO 8601 timestamp and compare with now
+        runCatching {
+            java.time.OffsetDateTime.parse(expiresAt).isAfter(java.time.OffsetDateTime.now())
+        }.getOrDefault(false)
+    }
+
     // ---------- DTO → domain mapping ----------
 
     private fun SwipeDeckProfileDto.toDatingProfile(): DatingProfile {
