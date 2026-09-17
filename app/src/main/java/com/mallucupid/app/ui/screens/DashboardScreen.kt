@@ -52,6 +52,7 @@ import com.mallucupid.app.data.remote.SessionManager
 import com.mallucupid.app.data.remote.SupabaseRepository
 import com.mallucupid.app.location.LocationHelper
 import com.mallucupid.app.notifications.MalluCupidMessagingService
+import com.mallucupid.app.permissions.rememberLocationPermissionLauncher
 import com.mallucupid.app.permissions.rememberNotificationPermissionLauncher
 import com.mallucupid.app.ui.theme.*
 
@@ -152,37 +153,65 @@ fun DashboardScreen(
         }
     }
 
-    // Silently refresh the user's own location on app launch (like Tinder).
-    // Runs in the background — no UI prompt, no loading spinner. Only fires
-    // if location permission is already granted; otherwise skipped entirely.
-    // Lives here (after `currentDraft` is declared) so it can update the
-    // in-memory draft and persist the new lat/lng/city to Supabase.
-    LaunchedEffect(Unit) {
-        if (!LocationHelper.hasLocationPermission(context)) return@LaunchedEffect
-        coroutineScope.launch {
-            try {
-                val loc = LocationHelper.getCurrentLocation(context)
-                if (loc != null) {
-                    val uid = SessionManager.current()?.userId
-                    if (uid != null) {
-                        val updatedDraft = currentDraft.copy(
-                            city = loc.fullLocation,
-                            latitude = loc.latitude,
-                            longitude = loc.longitude
-                        )
-                        currentDraft = updatedDraft
-                        // Persist to profiles table (lat/lng + city) — best effort,
-                        // failures are swallowed so they never crash the launch flow.
-                        SupabaseRepository.saveProfile(
-                            uid,
-                            updatedDraft.registeredEmail.ifBlank { SessionManager.current()?.email.orEmpty() },
-                            updatedDraft
-                        )
+    // Location: request permission + fetch fresh location + save to DB on every app launch.
+    // Like Tinder — keeps the user's location current so the swipe deck shows nearby profiles.
+    val requestLocation = rememberLocationPermissionLauncher { granted ->
+        if (granted) {
+            coroutineScope.launch {
+                try {
+                    val loc = LocationHelper.getCurrentLocation(context)
+                    if (loc != null) {
+                        val uid = SessionManager.current()?.userId
+                        if (uid != null) {
+                            val updatedDraft = currentDraft.copy(
+                                city = loc.fullLocation,
+                                latitude = loc.latitude,
+                                longitude = loc.longitude
+                            )
+                            currentDraft = updatedDraft
+                            SupabaseRepository.saveProfile(
+                                uid,
+                                updatedDraft.registeredEmail.ifBlank { SessionManager.current()?.email.orEmpty() },
+                                updatedDraft
+                            )
+                        }
                     }
+                } catch (_: Exception) {
+                    // Silent — location refresh is best-effort.
                 }
-            } catch (_: Exception) {
-                // Silent: location refresh is best-effort, never user-facing.
             }
+        }
+    }
+    LaunchedEffect(Unit) {
+        if (LocationHelper.hasLocationPermission(context)) {
+            // Already have permission — fetch location directly.
+            coroutineScope.launch {
+                try {
+                    val loc = LocationHelper.getCurrentLocation(context)
+                    if (loc != null) {
+                        val uid = SessionManager.current()?.userId
+                        if (uid != null) {
+                            val updatedDraft = currentDraft.copy(
+                                city = loc.fullLocation,
+                                latitude = loc.latitude,
+                                longitude = loc.longitude
+                            )
+                            currentDraft = updatedDraft
+                            SupabaseRepository.saveProfile(
+                                uid,
+                                updatedDraft.registeredEmail.ifBlank { SessionManager.current()?.email.orEmpty() },
+                                updatedDraft
+                            )
+                        }
+                    }
+                } catch (_: Exception) {
+                    // Silent — best effort.
+                }
+            }
+        } else {
+            // No permission yet — request it. The launcher callback will
+            // fetch + save location if the user grants it.
+            requestLocation()
         }
     }
 
