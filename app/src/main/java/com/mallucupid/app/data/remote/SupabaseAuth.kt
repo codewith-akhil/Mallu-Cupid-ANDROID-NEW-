@@ -33,11 +33,14 @@ object SupabaseAuth {
     /** Creates a user. Returns null on success, or a user-friendly error message. */
     suspend fun signUp(email: String, password: String): String? = withContext(Dispatchers.IO) {
         val cleanEmail = email.trim()
+        // Clear any stale access token — signup should be anonymous
+        SupabaseClient.accessToken = null
         try {
             val body = reqAdapter.toJson(mapOf("email" to cleanEmail, "password" to password))
             val req = Request.Builder()
                 .url("${SupabaseConfig.AUTH_BASE}/signup")
                 .header("apikey", SupabaseConfig.SUPABASE_ANON_KEY)
+                .header("Authorization", "Bearer ${SupabaseConfig.SUPABASE_ANON_KEY}")
                 .post(body.toRequestBody(json))
                 .build()
             SupabaseClient.http.newCall(req).execute().use { resp ->
@@ -63,11 +66,14 @@ object SupabaseAuth {
     /** Returns access_token on success, or null + user-friendly error. */
     suspend fun signInWithPassword(email: String, password: String): Pair<String?, String?> = withContext(Dispatchers.IO) {
         val cleanEmail = email.trim()
+        // Clear any stale access token before sign in
+        SupabaseClient.accessToken = null
         try {
             val body = reqAdapter.toJson(mapOf("email" to cleanEmail, "password" to password))
             val req = Request.Builder()
                 .url("${SupabaseConfig.AUTH_BASE}/token?grant_type=password")
                 .header("apikey", SupabaseConfig.SUPABASE_ANON_KEY)
+                .header("Authorization", "Bearer ${SupabaseConfig.SUPABASE_ANON_KEY}")
                 .post(body.toRequestBody(json))
                 .build()
             SupabaseClient.http.newCall(req).execute().use { resp ->
