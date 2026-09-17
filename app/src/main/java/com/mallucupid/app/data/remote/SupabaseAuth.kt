@@ -46,14 +46,14 @@ object SupabaseAuth {
                         text.contains("already registered", ignoreCase = true) -> "This email is already registered. Try signing in."
                         text.contains("weak", ignoreCase = true) -> "Password is too weak. Use at least 8 characters with a number."
                         text.contains("invalid", ignoreCase = true) -> "Please enter a valid email address."
-                        else -> "Could not create account. Please try again."
+                        else -> "Couldn't create your account. Please try again."
                     }
                 } else null
             }
         } catch (e: IOException) {
-            "Network error. Please check your connection and try again."
+            "No internet. Check your connection and try again."
         } catch (e: Exception) {
-            "Could not create account. Please try again."
+            "Couldn't create your account. Please try again."
         }
     }
 
@@ -72,9 +72,9 @@ object SupabaseAuth {
                 val text = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
                     when {
-                        text.contains("Invalid login", ignoreCase = true) -> null to "Invalid email or password."
+                        text.contains("Invalid login", ignoreCase = true) -> null to "Wrong email or password."
                         text.contains("Email not confirmed", ignoreCase = true) -> null to "Please verify your email first."
-                        else -> null to "Could not sign in. Please try again."
+                        else -> null to "Couldn't sign in. Please try again."
                     }
                 } else {
                     val session = sessionRespAdapter.fromJson(text)
@@ -83,14 +83,14 @@ object SupabaseAuth {
                         SessionManager.saveSession(session)
                         session.accessToken to null
                     } else {
-                        null to "Could not sign in. Please try again."
+                        null to "Couldn't sign in. Please try again."
                     }
                 }
             }
         } catch (e: IOException) {
-            null to "Network error. Please check your connection and try again."
+            null to "No internet. Check your connection and try again."
         } catch (e: Exception) {
-            null to "Could not sign in. Please try again."
+            null to "Couldn't sign in. Please try again."
         }
     }
 
@@ -119,7 +119,7 @@ object SupabaseAuth {
                 if (!resp.isSuccessful) {
                     when {
                         text.contains("Too many", ignoreCase = true) -> "Too many attempts. Please wait a few minutes."
-                        else -> "Could not send verification code. Please try again."
+                        else -> "Couldn't send the code. Please try again."
                     }
                 } else {
                     // Check for dev_code in the response (testing mode — Resend not configured)
@@ -134,9 +134,9 @@ object SupabaseAuth {
                 }
             }
         } catch (e: IOException) {
-            "Network error. Please check your connection and try again."
+            "No internet. Check your connection and try again."
         } catch (e: Exception) {
-            "Could not send verification code. Please try again."
+            "Couldn't send the code. Please try again."
         }
     }
 
@@ -155,17 +155,17 @@ object SupabaseAuth {
                 val parsed = try { verifyRespAdapter.fromJson(text) } catch (_: Exception) { null }
                 if (!resp.isSuccessful || parsed?.ok != true) {
                     when {
-                        parsed?.error?.contains("expired", ignoreCase = true) == true -> "Code expired. Please request a new one."
-                        parsed?.error?.contains("Invalid", ignoreCase = true) == true -> "Invalid code. Please try again."
+                        parsed?.error?.contains("expired", ignoreCase = true) == true -> "Code expired. Request a new one."
+                        parsed?.error?.contains("Invalid", ignoreCase = true) == true -> "Wrong code. Please try again."
                         parsed?.error?.contains("Too many", ignoreCase = true) == true -> "Too many attempts. Please request a new code."
-                        else -> "Verification failed. Please try again."
+                        else -> "Wrong code. Please try again."
                     }
                 } else null
             }
         } catch (e: IOException) {
-            "Network error. Please check your connection and try again."
+            "No internet. Check your connection and try again."
         } catch (e: Exception) {
-            "Verification failed. Please try again."
+            "Wrong code. Please try again."
         }
     }
 
@@ -181,13 +181,13 @@ object SupabaseAuth {
                 .build()
             SupabaseClient.http.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) {
-                    "Could not update password. Please try again."
+                    "Couldn't update your password. Please try again."
                 } else null
             }
         } catch (e: IOException) {
-            "Network error. Please check your connection and try again."
+            "No internet. Check your connection and try again."
         } catch (e: Exception) {
-            "Could not update password. Please try again."
+            "Couldn't update your password. Please try again."
         }
     }
 

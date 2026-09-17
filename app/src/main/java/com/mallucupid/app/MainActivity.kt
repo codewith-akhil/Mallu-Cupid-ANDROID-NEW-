@@ -1,10 +1,12 @@
 package com.mallucupid.app
 
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,29 +34,69 @@ import kotlinx.coroutines.withContext
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Initialise the persistent session store + restore any saved access token.
         SessionManager.init(applicationContext)
 
         enableEdgeToEdge()
         setContent {
             MalluCupidTheme {
                 val scope = rememberCoroutineScope()
-                // If a session already exists, skip straight to home.
                 val initialScreen = if (SessionManager.isLoggedIn()) "home" else "splash"
 
                 var currentScreen by remember { mutableStateOf(initialScreen) }
+                // Back-stack: track the previous screen so BackHandler can navigate back
+                val backStack = remember { mutableStateListOf<String>() }
+
                 var userEmail by remember { mutableStateOf(SessionManager.current()?.email ?: "") }
                 var userName by remember { mutableStateOf("") }
-                var userPassword by remember { mutableStateOf("") } // needed for signup→signin flow
+                var userPassword by remember { mutableStateOf("") }
                 var userDraft by remember { mutableStateOf(OnboardingDraft()) }
                 var loadingState by remember { mutableStateOf(false) }
                 var otpContext by remember { mutableStateOf("signup") }
 
+                // Helper: navigate to a screen + push the current one onto the back stack
+                fun navigateTo(target: String) {
+                    if (target != currentScreen) {
+                        backStack.add(0, currentScreen)
+                        currentScreen = target
+                    }
+                }
+
+                // Helper: go back — pop the back stack, or show "press again to exit" on home
+                var backPressedOnce by remember { mutableStateOf(false) }
+                fun goBack(): Boolean {
+                    return if (backStack.isNotEmpty()) {
+                        currentScreen = backStack.removeAt(0)
+                        true
+                    } else if (currentScreen == "home") {
+                        if (backPressedOnce) {
+                            false // let the system handle it (exit app)
+                        } else {
+                            backPressedOnce = true
+                            Toast.makeText(this, "Press back again to exit", Toast.LENGTH_SHORT).show()
+                            // Reset after 2 seconds
+                            scope.launch {
+                                kotlinx.coroutines.delay(2000)
+                                backPressedOnce = false
+                            }
+                            true
+                        }
+                    } else {
+                        false // entry screens (splash, welcome) — let the system exit
+                    }
+                }
+
+                // App-wide BackHandler — intercepts hardware back on EVERY screen
+                BackHandler(enabled = true) {
+                    if (!goBack()) {
+                        finish()
+                    }
+                }
+
                 Box(modifier = Modifier.fillMaxSize()) {
                     when (currentScreen) {
-                        "splash" -> SplashScreen(onFinished = { currentScreen = "welcome" })
+                        "splash" -> SplashScreen(onFinished = { navigateTo("welcome") })
 
-                        "welcome" -> WelcomeScreen(onGetStarted = { currentScreen = "signin" })
+                        "welcome" -> WelcomeScreen(onGetStarted = { navigateTo("signin") })
 
                         "signin" -> SignInScreen(
                             onSignIn = { email, password ->
@@ -65,18 +107,19 @@ class MainActivity : ComponentActivity() {
                                         loadingState = false
                                         if (token != null) {
                                             Toast.makeText(this@MainActivity, "Welcome back!", Toast.LENGTH_SHORT).show()
+                                            backStack.clear()
                                             currentScreen = "home"
                                         } else {
-                                            Toast.makeText(this@MainActivity, err ?: "Could not sign in", Toast.LENGTH_LONG).show()
+                                            Toast.makeText(this@MainActivity, err ?: "Wrong email or password.", Toast.LENGTH_LONG).show()
                                         }
                                     } catch (e: Exception) {
                                         loadingState = false
-                                        Toast.makeText(this@MainActivity, "Something went wrong. Please try again.", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(this@MainActivity, "No internet. Check your connection and try again.", Toast.LENGTH_LONG).show()
                                     }
                                 }
                             },
-                            onGoToSignUp = { currentScreen = "signup" },
-                            onForgotPassword = { currentScreen = "reset" },
+                            onGoToSignUp = { navigateTo("signup") },
+                            onForgotPassword = { navigateTo("reset") },
                             loading = loadingState
                         )
 
@@ -88,36 +131,33 @@ class MainActivity : ComponentActivity() {
                                 scope.launch {
                                     loadingState = true
                                     try {
-                                        // 1. Create the auth user
                                         val signUpErr = SupabaseAuth.signUp(email, password)
                                         if (signUpErr != null) {
                                             loadingState = false
                                             Toast.makeText(this@MainActivity, signUpErr, Toast.LENGTH_LONG).show()
                                             return@launch
                                         }
-                                        // 2. Send OTP
                                         val otpErr = SupabaseAuth.sendOtp(email)
                                         loadingState = false
                                         if (otpErr != null) {
-                                            Toast.makeText(this@MainActivity, otpErr, Toast.LENGTH_LONG).show()
+                                            Toast.makeText(this@MainActivity, "Couldn't send the code. Please try again.", Toast.LENGTH_LONG).show()
                                         } else {
-                                            // If a dev_code was returned (testing mode), surface it
+                                            // Log dev_code in debug only (never show to users)
                                             val devCode = SupabaseAuth.lastDevCode
                                             if (devCode != null) {
-                                                Toast.makeText(this@MainActivity, "Dev code: $devCode (Resend not configured)", Toast.LENGTH_LONG).show()
-                                            } else {
-                                                Toast.makeText(this@MainActivity, "We sent a 6-digit code to $email", Toast.LENGTH_SHORT).show()
+                                                Log.d("OTP", "dev_code for $email: $devCode")
                                             }
+                                            Toast.makeText(this@MainActivity, "Code sent to $email", Toast.LENGTH_LONG).show()
                                             otpContext = "signup"
-                                            currentScreen = "otp"
+                                            navigateTo("otp")
                                         }
                                     } catch (e: Exception) {
                                         loadingState = false
-                                        Toast.makeText(this@MainActivity, "Something went wrong. Please try again.", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(this@MainActivity, "No internet. Check your connection and try again.", Toast.LENGTH_LONG).show()
                                     }
                                 }
                             },
-                            onGoToSignIn = { currentScreen = "signin" },
+                            onGoToSignIn = { navigateTo("signin") },
                             loading = loadingState
                         )
 
@@ -130,24 +170,23 @@ class MainActivity : ComponentActivity() {
                                         val err = SupabaseAuth.sendOtp(email)
                                         loadingState = false
                                         if (err != null) {
-                                            Toast.makeText(this@MainActivity, err, Toast.LENGTH_LONG).show()
+                                            Toast.makeText(this@MainActivity, "Couldn't send the code. Please try again.", Toast.LENGTH_LONG).show()
                                         } else {
                                             val devCode = SupabaseAuth.lastDevCode
                                             if (devCode != null) {
-                                                Toast.makeText(this@MainActivity, "Dev code: $devCode (Resend not configured)", Toast.LENGTH_LONG).show()
-                                            } else {
-                                                Toast.makeText(this@MainActivity, "We sent a 6-digit code to $email", Toast.LENGTH_SHORT).show()
+                                                Log.d("OTP", "dev_code for $email: $devCode")
                                             }
+                                            Toast.makeText(this@MainActivity, "Code sent to $email", Toast.LENGTH_LONG).show()
                                             otpContext = "reset"
-                                            currentScreen = "otp"
+                                            navigateTo("otp")
                                         }
                                     } catch (e: Exception) {
                                         loadingState = false
-                                        Toast.makeText(this@MainActivity, "Something went wrong. Please try again.", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(this@MainActivity, "No internet. Check your connection and try again.", Toast.LENGTH_LONG).show()
                                     }
                                 }
                             },
-                            onBackToSignIn = { currentScreen = "signin" },
+                            onBackToSignIn = { navigateTo("signin") },
                             loading = loadingState
                         )
 
@@ -155,7 +194,6 @@ class MainActivity : ComponentActivity() {
                             email = userEmail.ifEmpty { "your email" },
                             otpContext = otpContext,
                             onVerified = { code ->
-                                // Verify the OTP code against the server, THEN proceed.
                                 scope.launch {
                                     loadingState = true
                                     try {
@@ -165,30 +203,29 @@ class MainActivity : ComponentActivity() {
                                             Toast.makeText(this@MainActivity, verifyErr, Toast.LENGTH_LONG).show()
                                             return@launch
                                         }
-                                        // OTP verified — proceed based on context
                                         if (otpContext == "signup") {
-                                            // Sign in with password → onboarding
                                             val (token, err) = SupabaseAuth.signInWithPassword(userEmail, userPassword)
                                             loadingState = false
                                             if (token != null) {
                                                 userDraft = userDraft.copy(name = userName)
+                                                backStack.clear()
                                                 currentScreen = "onboarding"
                                             } else {
-                                                Toast.makeText(this@MainActivity, err ?: "Could not sign in. Please try again.", Toast.LENGTH_LONG).show()
+                                                Toast.makeText(this@MainActivity, "Wrong email or password.", Toast.LENGTH_LONG).show()
+                                                backStack.clear()
                                                 currentScreen = "signin"
                                             }
                                         } else {
-                                            // reset flow: go to new password screen
                                             loadingState = false
-                                            currentScreen = "newpassword"
+                                            navigateTo("newpassword")
                                         }
                                     } catch (e: Exception) {
                                         loadingState = false
-                                        Toast.makeText(this@MainActivity, "Something went wrong. Please try again.", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(this@MainActivity, "No internet. Check your connection and try again.", Toast.LENGTH_LONG).show()
                                     }
                                 }
                             },
-                            onBack = { currentScreen = "signin" },
+                            onBack = { navigateTo(if (otpContext == "signup") "signup" else "reset") },
                             loading = loadingState
                         )
 
@@ -201,18 +238,19 @@ class MainActivity : ComponentActivity() {
                                         val err = SupabaseAuth.resetPassword(email, newPassword)
                                         loadingState = false
                                         if (err != null) {
-                                            Toast.makeText(this@MainActivity, err, Toast.LENGTH_LONG).show()
+                                            Toast.makeText(this@MainActivity, "Couldn't update your password. Please try again.", Toast.LENGTH_LONG).show()
                                         } else {
-                                            Toast.makeText(this@MainActivity, "Password updated! Please sign in.", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(this@MainActivity, "Password updated! Please sign in.", Toast.LENGTH_LONG).show()
+                                            backStack.clear()
                                             currentScreen = "signin"
                                         }
                                     } catch (e: Exception) {
                                         loadingState = false
-                                        Toast.makeText(this@MainActivity, "Something went wrong. Please try again.", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(this@MainActivity, "No internet. Check your connection and try again.", Toast.LENGTH_LONG).show()
                                     }
                                 }
                             },
-                            onBack = { currentScreen = "signin" },
+                            onBack = { navigateTo("otp") },
                             loading = loadingState
                         )
 
@@ -229,21 +267,23 @@ class MainActivity : ComponentActivity() {
                                         }
                                         loadingState = false
                                         if (!ok) {
-                                            Toast.makeText(this@MainActivity, "Profile saved locally", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(this@MainActivity, "Profile saved", Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                     userDraft = completedDraft
+                                    backStack.clear()
                                     currentScreen = "home"
                                 }
                             },
-                            onBack = { currentScreen = "signin" }
+                            onBack = { navigateTo("signin") }
                         )
 
                         "home" -> DashboardScreen(
                             userDraft = userDraft,
-                            onOpenOnboarding = { currentScreen = "onboarding" },
+                            onOpenOnboarding = { navigateTo("onboarding") },
                             onSignOut = {
                                 SessionManager.signOut()
+                                backStack.clear()
                                 currentScreen = "welcome"
                             }
                         )

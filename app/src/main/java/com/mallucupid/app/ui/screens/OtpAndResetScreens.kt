@@ -106,10 +106,12 @@ fun ResetPasswordScreen(
                 AuthButton(
                     text = "Send OTP",
                     onClick = {
-                        emailError = !isValidResetEmail(email)
+                        val trimmedEmail = email.trim()
+                        email = trimmedEmail
+                        emailError = !isValidResetEmail(trimmedEmail)
                         emailErrorText = if (emailError) "Enter a valid email address" else null
                         if (!emailError) {
-                            onSendOtp(email)
+                            onSendOtp(trimmedEmail)
                         }
                     },
                     enabled = !loading,
@@ -281,16 +283,21 @@ fun OtpVerificationScreen(
                     onClick = {
                         scope.launch {
                             resending = true
-                            val err = SupabaseAuth.sendOtp(email)
-                            resending = false
-                            if (err != null) {
-                                Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
-                                return@launch
+                            try {
+                                val err = SupabaseAuth.sendOtp(email)
+                                resending = false
+                                if (err != null) {
+                                    Toast.makeText(context, "Couldn't send the code. Please try again.", Toast.LENGTH_LONG).show()
+                                    return@launch
+                                }
+                                otp = List(6) { "" }
+                                resendSeconds = 60
+                                resendTrigger++
+                                Toast.makeText(context, "New code sent to your email", Toast.LENGTH_LONG).show()
+                            } catch (e: Exception) {
+                                resending = false
+                                Toast.makeText(context, "Couldn't send the code. Please try again.", Toast.LENGTH_LONG).show()
                             }
-                            otp = List(6) { "" }
-                            resendSeconds = 60
-                            resendTrigger++
-                            Toast.makeText(context, "Code resent", Toast.LENGTH_SHORT).show()
                         }
                     },
                     enabled = resendSeconds == 0 && !resending && !loading,

@@ -141,10 +141,12 @@ fun SignInScreen(
                 AuthButton(
                     text = "Sign In",
                     onClick = {
-                        emailError = email.isEmpty() || !isValidEmail(email)
+                        val trimmedEmail = email.trim()
+                        email = trimmedEmail
+                        emailError = trimmedEmail.isEmpty() || !isValidEmail(trimmedEmail)
                         emailErrorText = when {
-                            email.isEmpty() -> "Email is required"
-                            !isValidEmail(email) -> "Enter a valid email address"
+                            trimmedEmail.isEmpty() -> "Email is required"
+                            !isValidEmail(trimmedEmail) -> "Enter a valid email address"
                             else -> null
                         }
                         passwordError = password.length < 6
@@ -330,8 +332,10 @@ fun SignUpScreen(
                 AuthButton(
                     text = "Continue",
                     onClick = {
+                        val trimmedEmail = email.trim()
+                        email = trimmedEmail
                         nameError = name.isBlank()
-                        emailError = !isValidEmail(email)
+                        emailError = !isValidEmail(trimmedEmail)
                         emailErrorText = if (emailError) "Enter a valid email address" else null
                         val passwordValid = SupabaseAuth.isPasswordValid(password)
                         passwordError = !passwordValid
