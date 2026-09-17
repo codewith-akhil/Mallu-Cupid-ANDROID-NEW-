@@ -73,6 +73,7 @@ data class SwipeDeckProfileDto(
     val interests: List<String>? = null,
     val photos: List<String>? = null,
     val prompts: List<PromptDto>? = null,
+    @Json(name = "distance_km") val distanceKm: Int? = null,
 )
 
 @JsonClass(generateAdapter = true)
@@ -138,6 +139,8 @@ data class ProfileUpsert(
     @Json(name = "my_boosts_count") val myBoostsCount: Int? = null,
     @Json(name = "photo_verified_only_chat") val photoVerifiedOnlyChat: Boolean? = null,
     @Json(name = "is_online") val isOnline: Boolean? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
 )
 
 @JsonClass(generateAdapter = true)

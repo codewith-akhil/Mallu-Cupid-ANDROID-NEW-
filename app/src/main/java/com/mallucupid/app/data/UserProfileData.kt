@@ -16,6 +16,8 @@ data class OnboardingDraft(
     val birthMonth: String = "08",
     val birthYear: String = "1998",
     val city: String = "Sydney, Australia",
+    val latitude: Double? = null,
+    val longitude: Double? = null,
     val distance: Int = 25,
     val pronouns: String = "He",
     val height: String = "165 cm",

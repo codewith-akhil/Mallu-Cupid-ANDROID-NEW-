@@ -353,6 +353,8 @@ object SupabaseRepository {
             myBoostsCount = draft.myBoostsCount,
             photoVerifiedOnlyChat = draft.photoVerifiedOnlyChat,
             isOnline = draft.isOnline,
+            latitude = draft.latitude,
+            longitude = draft.longitude,
         )
         val body = profileAdapter.toJson(profile)
         val req = Request.Builder()
@@ -596,7 +598,7 @@ object SupabaseRepository {
             age = age,
             isVerified = isVerified ?: false,
             location = city ?: "Nearby",
-            distanceKm = 0,
+            distanceKm = distanceKm ?: 0,
             bio = bio.orEmpty(),
             photos = photos.orEmpty().ifEmpty { listOf("https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=800&q=80") },
             profession = profession ?: "",

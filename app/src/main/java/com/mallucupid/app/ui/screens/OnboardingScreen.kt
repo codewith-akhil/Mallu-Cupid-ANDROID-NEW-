@@ -403,7 +403,7 @@ private fun OnboardingStepBody(
         )
         3 -> Step3Location(
             city = draft.city,
-            onCityChange = { onDraftChange(draft.copy(city = it)) },
+            onCityChange = { city, lat, lng -> onDraftChange(draft.copy(city = city, latitude = lat, longitude = lng)) },
             distance = draft.distance,
             onDistanceChange = { onDraftChange(draft.copy(distance = it)) }
         )
@@ -1007,7 +1007,7 @@ private fun Step2Birthday(
 @Composable
 private fun Step3Location(
     city: String,
-    onCityChange: (String) -> Unit,
+    onCityChange: (String, Double?, Double?) -> Unit,
     distance: Int,
     onDistanceChange: (Int) -> Unit
 ) {
@@ -1019,7 +1019,7 @@ private fun Step3Location(
         try {
             val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
             if (locationManager == null) {
-                onCityChange("Ukiah, California, United States")
+                onCityChange("Ukiah, California, United States", null, null)
                 isLocating = false
                 return
             }
@@ -1028,7 +1028,7 @@ private fun Step3Location(
             val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
             if (!hasFine && !hasCoarse) {
-                onCityChange("Ukiah, California, United States")
+                onCityChange("Ukiah, California, United States", null, null)
                 isLocating = false
                 return
             }
@@ -1046,7 +1046,7 @@ private fun Step3Location(
                         val stateName = address?.adminArea ?: "California"
                         val countryName = address?.countryName ?: "United States"
                         val fullLocation = "$cityName, $stateName, $countryName"
-                        onCityChange(fullLocation)
+                        onCityChange(fullLocation, location.latitude, location.longitude)
                         isLocating = false
                     }
                 } else {
@@ -1057,15 +1057,15 @@ private fun Step3Location(
                     val stateName = address?.adminArea ?: "California"
                     val countryName = address?.countryName ?: "United States"
                     val fullLocation = "$cityName, $stateName, $countryName"
-                    onCityChange(fullLocation)
+                    onCityChange(fullLocation, location.latitude, location.longitude)
                     isLocating = false
                 }
             } else {
-                onCityChange("Ukiah, California, United States")
+                onCityChange("Ukiah, California, United States", null, null)
                 isLocating = false
             }
         } catch (e: Exception) {
-            onCityChange("Ukiah, California, United States")
+            onCityChange("Ukiah, California, United States", null, null)
             isLocating = false
         }
     }
@@ -1130,7 +1130,7 @@ private fun Step3Location(
 
                 BasicTextField(
                     value = city,
-                    onValueChange = onCityChange,
+                    onValueChange = { onCityChange(it, null, null) },
                     textStyle = TextStyle(
                         color = Color.White,
                         fontSize = 15.sp,

@@ -176,13 +176,13 @@ fun EditProfileScreen(
                 }
 
                 withContext(Dispatchers.Main) {
-                    draft = draft.copy(city = detectedCity)
+                    draft = draft.copy(city = detectedCity, latitude = loc?.latitude, longitude = loc?.longitude)
                     isFetchingLocation = false
                     locationFeedbackMessage = "Location updated: $detectedCity"
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    draft = draft.copy(city = "Your city, your country")
+                    draft = draft.copy(city = "Your city, your country", latitude = null, longitude = null)
                     isFetchingLocation = false
                     locationFeedbackMessage = "Location detection failed. Please enter your city manually."
                 }
