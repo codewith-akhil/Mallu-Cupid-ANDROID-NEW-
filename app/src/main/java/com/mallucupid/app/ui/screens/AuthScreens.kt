@@ -428,17 +428,17 @@ fun AuthTextField(
             value = value,
             onValueChange = onValueChange,
             placeholder = {
-                Text(placeholder, color = Color.White.copy(alpha = 0.6f))
+                Text(placeholder, color = Color.Gray)
             },
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(14.dp),
             colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = Color.White.copy(alpha = 0.12f),
-                unfocusedContainerColor = Color.White.copy(alpha = 0.12f),
+                focusedContainerColor = Color.White.copy(alpha = 0.95f),
+                unfocusedContainerColor = Color.White.copy(alpha = 0.9f),
                 focusedBorderColor = borderColor,
                 unfocusedBorderColor = borderColor,
-                focusedTextColor = Color.White,
-                unfocusedTextColor = Color.White,
+                focusedTextColor = Color.Black,
+                unfocusedTextColor = Color.Black,
                 cursorColor = AccentPink
             ),
             singleLine = true,

@@ -937,7 +937,7 @@ private fun Step2Birthday(
                 modifier = Modifier.align(Alignment.Start)
             ) {
                 Text(
-                    text = if (age >= 18) "Age: $age years old (Eligible)" else "Age: $age (Must be 18+)",
+                    text = if (age >= 18) "Age: $age years old" else "Age: $age (Must be 18+)",
                     color = if (age >= 18) Color.White else SoftPink,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
@@ -969,9 +969,8 @@ private fun Step3Location(
             if (loc != null) {
                 onCityChange(loc.fullLocation, loc.latitude, loc.longitude)
             } else {
-                // FusedLocationProviderClient could not obtain a fresh fix
-                // (emulator, indoor, or permission revoked at runtime).
-                onCityChange("Location unavailable, please type your city", null, null)
+                // Location unavailable — leave city empty so user can type manually
+                onCityChange("", null, null)
             }
             isLocating = false
         }
