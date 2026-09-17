@@ -294,13 +294,13 @@ fun EditProfileScreen(
             // Live Preview of how other singles nearby see the user
             val previewProfile = DatingProfile(
                 id = "user_preview",
-                name = draft.name.ifBlank { "Akhil" },
+                name = draft.name.ifBlank { "" },
                 age = draft.calculatedAge,
                 isVerified = draft.isVerified,
                 location = "${draft.city} · 0 km away",
                 distanceKm = 0,
                 bio = draft.bio,
-                photos = if (draft.photos.isNotEmpty()) draft.photos else listOf("https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=800&q=80"),
+                photos = draft.photos,
                 profession = listOfNotNull(draft.jobTitle.ifBlank { null }, draft.company.ifBlank { null }).joinToString(" at "),
                 college = draft.college,
                 lookingFor = draft.lookingFor,
@@ -790,7 +790,7 @@ fun EditProfileScreen(
                     subtitle = "Select your identified gender",
                     icon = Icons.Default.Wc
                 ) {
-                    val genderOptions = listOf("Man", "Woman", "Non-binary", "Other")
+                    val genderOptions = listOf("Man", "Woman", "Transman", "Transwoman", "Non-binary")
                     SelectableChipRow(
                         options = genderOptions,
                         selectedOption = draft.gender,
@@ -1317,7 +1317,7 @@ fun EditProfileScreen(
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
                             text = "Log Out of MalluCupid",
-                            fontSize = 15.sp,
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
                             color = NopeCoral
                         )
@@ -1350,7 +1350,7 @@ fun EditProfileScreen(
                     text = "Log Out of MalluCupid?",
                     fontWeight = FontWeight.Bold,
                     color = DashboardCream,
-                    fontSize = 18.sp
+                    fontSize = 16.sp
                 )
             },
             text = {
@@ -1788,9 +1788,9 @@ private fun GroupedActionRow(
 private fun darkFieldColors() = OutlinedTextFieldDefaults.colors(
     focusedBorderColor = DashboardTerracotta,
     unfocusedBorderColor = Color(0xFF4A3A33),
-    focusedTextColor = DashboardCream,
-    unfocusedTextColor = DashboardCream,
-    focusedContainerColor = Color(0xFF261E1A),
-    unfocusedContainerColor = Color(0xFF261E1A),
+    focusedTextColor = Color.Black,
+    unfocusedTextColor = Color.Black,
+    focusedContainerColor = Color.White.copy(alpha = 0.95f),
+    unfocusedContainerColor = Color.White.copy(alpha = 0.95f),
     cursorColor = DashboardPeach
 )
