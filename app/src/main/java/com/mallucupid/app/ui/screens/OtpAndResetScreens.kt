@@ -116,8 +116,8 @@ fun ResetPasswordScreen(
                     onClick = {
                         val trimmedEmail = email.trim()
                         email = trimmedEmail
-                        emailError = !isValidResetEmail(trimmedEmail)
-                        emailErrorText = if (emailError) "Enter a valid email address" else null
+                        emailError = trimmedEmail.isEmpty()
+                        emailErrorText = if (emailError) "Email is required" else null
                         if (!emailError) {
                             onSendOtp(trimmedEmail)
                         }

@@ -143,16 +143,12 @@ fun SignInScreen(
                     onClick = {
                         val trimmedEmail = email.trim()
                         email = trimmedEmail
-                        emailError = trimmedEmail.isEmpty() || !isValidEmail(trimmedEmail)
-                        emailErrorText = when {
-                            trimmedEmail.isEmpty() -> "Email is required"
-                            !isValidEmail(trimmedEmail) -> "Enter a valid email address"
-                            else -> null
-                        }
+                        emailError = trimmedEmail.isEmpty()
+                        emailErrorText = if (emailError) "Email is required" else null
                         passwordError = password.length < 6
                         passwordErrorText = if (passwordError) "Minimum 6 characters" else null
                         if (!emailError && !passwordError) {
-                            onSignIn(email, password)
+                            onSignIn(trimmedEmail, password)
                         }
                     },
                     enabled = !loading,
@@ -335,13 +331,13 @@ fun SignUpScreen(
                         val trimmedEmail = email.trim()
                         email = trimmedEmail
                         nameError = name.isBlank()
-                        emailError = !isValidEmail(trimmedEmail)
-                        emailErrorText = if (emailError) "Enter a valid email address" else null
+                        emailError = trimmedEmail.isEmpty()
+                        emailErrorText = if (emailError) "Email is required" else null
                         val passwordValid = SupabaseAuth.isPasswordValid(password)
                         passwordError = !passwordValid
                         passwordErrorText = if (passwordError) "Please meet all password requirements" else null
                         if (!nameError && !emailError && !passwordError) {
-                            onContinue(name, email, password)
+                            onContinue(name, trimmedEmail, password)
                         }
                     },
                     enabled = !loading,
