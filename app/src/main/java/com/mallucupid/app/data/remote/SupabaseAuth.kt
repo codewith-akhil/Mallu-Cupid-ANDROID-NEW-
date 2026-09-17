@@ -41,7 +41,6 @@ object SupabaseAuth {
             val body = reqAdapter.toJson(mapOf("email" to cleanEmail, "password" to password))
             val req = Request.Builder()
                 .url("${SupabaseConfig.AUTH_BASE}/signup")
-                .header("apikey", SupabaseConfig.SUPABASE_ANON_KEY)
                 .post(body.toRequestBody(json))
                 .build()
             SupabaseClient.http.newCall(req).execute().use { resp ->
@@ -74,7 +73,6 @@ object SupabaseAuth {
             val body = reqAdapter.toJson(mapOf("email" to cleanEmail, "password" to password))
             val req = Request.Builder()
                 .url("${SupabaseConfig.AUTH_BASE}/token?grant_type=password")
-                .header("apikey", SupabaseConfig.SUPABASE_ANON_KEY)
                 .post(body.toRequestBody(json))
                 .build()
             SupabaseClient.http.newCall(req).execute().use { resp ->
