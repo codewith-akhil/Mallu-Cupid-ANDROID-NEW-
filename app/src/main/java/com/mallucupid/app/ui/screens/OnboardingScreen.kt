@@ -1,13 +1,7 @@
 package com.mallucupid.app.ui.screens
 
 import android.Manifest
-import android.content.Context
-import android.content.pm.PackageManager
-import android.location.Geocoder
-import android.location.Location
-import android.location.LocationManager
 import android.net.Uri
-import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -62,12 +56,13 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import com.mallucupid.app.data.OnboardingDraft
 import com.mallucupid.app.data.PromptItem
 import com.mallucupid.app.data.SampleProfiles
+import com.mallucupid.app.location.LocationHelper
 import com.mallucupid.app.ui.theme.*
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 private const val TOTAL_STEPS = 9
@@ -1012,60 +1007,20 @@ private fun Step3Location(
     onDistanceChange: (Int) -> Unit
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     var isLocating by remember { mutableStateOf(false) }
 
     fun fetchDeviceLocation() {
         isLocating = true
-        try {
-            val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
-            if (locationManager == null) {
-                onCityChange("Ukiah, California, United States", null, null)
-                isLocating = false
-                return
-            }
-
-            val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-            val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-
-            if (!hasFine && !hasCoarse) {
-                onCityChange("Ukiah, California, United States", null, null)
-                isLocating = false
-                return
-            }
-
-            val location: Location? = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-                ?: locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
-                ?: locationManager.getLastKnownLocation(LocationManager.PASSIVE_PROVIDER)
-
-            if (location != null) {
-                val geocoder = Geocoder(context, java.util.Locale.getDefault())
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    geocoder.getFromLocation(location.latitude, location.longitude, 1) { addresses ->
-                        val address = addresses.firstOrNull()
-                        val cityName = address?.locality ?: address?.subAdminArea ?: address?.subLocality ?: "Ukiah"
-                        val stateName = address?.adminArea ?: "California"
-                        val countryName = address?.countryName ?: "United States"
-                        val fullLocation = "$cityName, $stateName, $countryName"
-                        onCityChange(fullLocation, location.latitude, location.longitude)
-                        isLocating = false
-                    }
-                } else {
-                    @Suppress("DEPRECATION")
-                    val addresses = geocoder.getFromLocation(location.latitude, location.longitude, 1)
-                    val address = addresses?.firstOrNull()
-                    val cityName = address?.locality ?: address?.subAdminArea ?: address?.subLocality ?: "Ukiah"
-                    val stateName = address?.adminArea ?: "California"
-                    val countryName = address?.countryName ?: "United States"
-                    val fullLocation = "$cityName, $stateName, $countryName"
-                    onCityChange(fullLocation, location.latitude, location.longitude)
-                    isLocating = false
-                }
+        coroutineScope.launch {
+            val loc = LocationHelper.getCurrentLocation(context)
+            if (loc != null) {
+                onCityChange(loc.fullLocation, loc.latitude, loc.longitude)
             } else {
-                onCityChange("Ukiah, California, United States", null, null)
-                isLocating = false
+                // FusedLocationProviderClient could not obtain a fresh fix
+                // (emulator, indoor, or permission revoked at runtime).
+                onCityChange("Location unavailable, please type your city", null, null)
             }
-        } catch (e: Exception) {
-            onCityChange("Ukiah, California, United States", null, null)
             isLocating = false
         }
     }

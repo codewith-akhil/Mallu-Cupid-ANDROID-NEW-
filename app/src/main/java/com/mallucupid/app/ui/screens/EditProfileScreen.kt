@@ -5,11 +5,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.location.Geocoder
-import android.location.Location
-import android.location.LocationManager
 import android.net.Uri
-import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -60,11 +56,11 @@ import coil.compose.AsyncImage
 import com.mallucupid.app.data.DatingProfile
 import com.mallucupid.app.data.OnboardingDraft
 import com.mallucupid.app.data.PromptItem
+import com.mallucupid.app.location.LocationHelper
 import com.mallucupid.app.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -133,59 +129,23 @@ fun EditProfileScreen(
         }
     }
 
-    // Real Location Permission & Fetcher
+    // Real Location Permission & Fetcher (FusedLocationProviderClient via LocationHelper)
     fun executeLocationFetch() {
         isFetchingLocation = true
         locationFeedbackMessage = "Locating via GPS..."
         coroutineScope.launch(Dispatchers.IO) {
-            try {
-                val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
-                var loc: Location? = null
-                if (locationManager != null) {
-                    val isGpsEnabled = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
-                    val isNetworkEnabled = locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
-                    if (isNetworkEnabled) {
-                        try { loc = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER) } catch (_: SecurityException) {}
-                    }
-                    if (loc == null && isGpsEnabled) {
-                        try { loc = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER) } catch (_: SecurityException) {}
-                    }
-                }
-
-                var detectedCity: String? = null
+            val loc = LocationHelper.getCurrentLocation(context)
+            withContext(Dispatchers.Main) {
                 if (loc != null) {
-                    try {
-                        val geocoder = Geocoder(context, Locale.getDefault())
-                        val addresses = geocoder.getFromLocation(loc.latitude, loc.longitude, 1)
-                        val address = addresses?.firstOrNull()
-                        if (address != null) {
-                            val city = address.locality ?: address.subAdminArea ?: address.adminArea
-                            val state = address.adminArea
-                            val country = address.countryName
-                            detectedCity = listOfNotNull(city, state, country)
-                                .filter { it.isNotBlank() }
-                                .distinct()
-                                .joinToString(", ")
-                        }
-                    } catch (_: Exception) {}
-                }
-
-                if (detectedCity.isNullOrBlank()) {
-                    // Fallback to a neutral default if emulator or indoor GPS has no fix
-                    detectedCity = "Your city, your country"
-                }
-
-                withContext(Dispatchers.Main) {
-                    draft = draft.copy(city = detectedCity, latitude = loc?.latitude, longitude = loc?.longitude)
-                    isFetchingLocation = false
-                    locationFeedbackMessage = "Location updated: $detectedCity"
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    draft = draft.copy(city = "Your city, your country", latitude = null, longitude = null)
-                    isFetchingLocation = false
+                    draft = draft.copy(city = loc.fullLocation, latitude = loc.latitude, longitude = loc.longitude)
+                    locationFeedbackMessage = "Location updated: ${loc.fullLocation}"
+                } else {
+                    // FusedLocationProviderClient could not obtain a fresh fix
+                    // (emulator, indoor, or permission revoked at runtime).
+                    draft = draft.copy(city = "Location unavailable", latitude = null, longitude = null)
                     locationFeedbackMessage = "Location detection failed. Please enter your city manually."
                 }
+                isFetchingLocation = false
             }
         }
     }

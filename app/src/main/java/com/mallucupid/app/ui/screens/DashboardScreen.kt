@@ -50,6 +50,7 @@ import com.mallucupid.app.data.OnboardingDraft
 import com.mallucupid.app.data.SampleProfiles
 import com.mallucupid.app.data.remote.SessionManager
 import com.mallucupid.app.data.remote.SupabaseRepository
+import com.mallucupid.app.location.LocationHelper
 import com.mallucupid.app.notifications.MalluCupidMessagingService
 import com.mallucupid.app.permissions.rememberNotificationPermissionLauncher
 import com.mallucupid.app.ui.theme.*
@@ -148,6 +149,40 @@ fun DashboardScreen(
                 it.location.contains(filter, ignoreCase = true)
             }
             if (filtered.isNotEmpty()) filtered else profiles
+        }
+    }
+
+    // Silently refresh the user's own location on app launch (like Tinder).
+    // Runs in the background — no UI prompt, no loading spinner. Only fires
+    // if location permission is already granted; otherwise skipped entirely.
+    // Lives here (after `currentDraft` is declared) so it can update the
+    // in-memory draft and persist the new lat/lng/city to Supabase.
+    LaunchedEffect(Unit) {
+        if (!LocationHelper.hasLocationPermission(context)) return@LaunchedEffect
+        coroutineScope.launch {
+            try {
+                val loc = LocationHelper.getCurrentLocation(context)
+                if (loc != null) {
+                    val uid = SessionManager.current()?.userId
+                    if (uid != null) {
+                        val updatedDraft = currentDraft.copy(
+                            city = loc.fullLocation,
+                            latitude = loc.latitude,
+                            longitude = loc.longitude
+                        )
+                        currentDraft = updatedDraft
+                        // Persist to profiles table (lat/lng + city) — best effort,
+                        // failures are swallowed so they never crash the launch flow.
+                        SupabaseRepository.saveProfile(
+                            uid,
+                            updatedDraft.registeredEmail.ifBlank { SessionManager.current()?.email.orEmpty() },
+                            updatedDraft
+                        )
+                    }
+                }
+            } catch (_: Exception) {
+                // Silent: location refresh is best-effort, never user-facing.
+            }
         }
     }
 
