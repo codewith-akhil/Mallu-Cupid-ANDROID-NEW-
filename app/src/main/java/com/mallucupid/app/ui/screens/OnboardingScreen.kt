@@ -1482,24 +1482,6 @@ private fun Step4Photos(
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium
             )
-
-            // Quick add sample photo button for testing
-            TextButton(
-                onClick = {
-                    val available = SampleProfiles.samplePhotoPool.filter { !photos.contains(it) }
-                    if (available.isNotEmpty()) {
-                        onPhotosChange(photos + available.first())
-                    }
-                },
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-            ) {
-                Text(
-                    text = "+ Sample Photo",
-                    color = SoftPink,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
         }
     }
 }

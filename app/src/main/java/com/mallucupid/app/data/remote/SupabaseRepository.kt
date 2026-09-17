@@ -700,7 +700,7 @@ object SupabaseRepository {
             location = city ?: "Nearby",
             distanceKm = distanceKm ?: 0,
             bio = bio.orEmpty(),
-            photos = photos.orEmpty().ifEmpty { listOf("https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=800&q=80") },
+            photos = photos.orEmpty(),
             profession = profession ?: "",
             lookingFor = lookingFor ?: "Long-term partner",
             essentialsGender = gender ?: "Woman",
