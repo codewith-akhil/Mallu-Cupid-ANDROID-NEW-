@@ -45,15 +45,15 @@ object SupabaseAuth {
                     when {
                         text.contains("already registered", ignoreCase = true) -> "This email is already registered. Try signing in."
                         text.contains("weak", ignoreCase = true) -> "Password is too weak. Use at least 8 characters with a number."
-                        text.contains("invalid", ignoreCase = true) -> "Please enter a valid email address."
-                        else -> "Couldn't create your account. Please try again."
+                        text.contains("invalid", ignoreCase = true) -> "Wrong email or password."
+                        else -> "Wrong email or password."
                     }
                 } else null
             }
         } catch (e: IOException) {
             "No internet. Check your connection and try again."
         } catch (e: Exception) {
-            "Couldn't create your account. Please try again."
+            "Wrong email or password."
         }
     }
 
@@ -74,7 +74,7 @@ object SupabaseAuth {
                     when {
                         text.contains("Invalid login", ignoreCase = true) -> null to "Wrong email or password."
                         text.contains("Email not confirmed", ignoreCase = true) -> null to "Please verify your email first."
-                        else -> null to "Couldn't sign in. Please try again."
+                        else -> null to "Wrong email or password."
                     }
                 } else {
                     val session = sessionRespAdapter.fromJson(text)
@@ -83,14 +83,14 @@ object SupabaseAuth {
                         SessionManager.saveSession(session)
                         session.accessToken to null
                     } else {
-                        null to "Couldn't sign in. Please try again."
+                        null to "Wrong email or password."
                     }
                 }
             }
         } catch (e: IOException) {
             null to "No internet. Check your connection and try again."
         } catch (e: Exception) {
-            null to "Couldn't sign in. Please try again."
+            null to "Wrong email or password."
         }
     }
 
