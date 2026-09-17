@@ -289,7 +289,7 @@ fun OnboardingScreen(
                     ) {
                         Text(
                             text = if (step < TOTAL_STEPS) "Continue" else if (isSaving) "Saving profile..." else "Finish my profile",
-                            fontSize = 15.sp,
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = Color.White
                         )
@@ -640,7 +640,7 @@ private fun Step1Gender(
             Surface(
                 onClick = { genderDropdownExpanded = true },
                 shape = RoundedCornerShape(16.dp),
-                color = if (gender.isNotBlank()) AccentPink.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.12f),
+                color = if (gender.isNotBlank()) AccentPink.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.95f),
                 border = BorderStroke(
                     1.5.dp,
                     if (gender.isNotBlank()) AccentPink else Color.White.copy(alpha = 0.2f)
@@ -687,7 +687,7 @@ private fun Step1Gender(
                                 Text(
                                     text = option,
                                     color = if (isSelected) SoftPink else Color.White,
-                                    fontSize = 15.sp,
+                                    fontSize = 13.sp,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                                 )
                                 if (isSelected) {
@@ -724,7 +724,7 @@ private fun Step1Gender(
             Surface(
                 onClick = { meetDropdownExpanded = true },
                 shape = RoundedCornerShape(16.dp),
-                color = if (lookingFor.isNotBlank()) AccentPink.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.12f),
+                color = if (lookingFor.isNotBlank()) AccentPink.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.95f),
                 border = BorderStroke(
                     1.5.dp,
                     if (lookingFor.isNotBlank()) AccentPink else Color.White.copy(alpha = 0.2f)
@@ -771,7 +771,7 @@ private fun Step1Gender(
                                 Text(
                                     text = option,
                                     color = if (isSelected) SoftPink else Color.White,
-                                    fontSize = 15.sp,
+                                    fontSize = 13.sp,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                                 )
                                 if (isSelected) {
@@ -878,7 +878,7 @@ private fun Step2Birthday(
             OutlinedTextField(
                 value = day,
                 onValueChange = { if (it.length <= 2 && it.all { c -> c.isDigit() }) onDayChange(it) },
-                placeholder = { Text("DD", color = Color.White.copy(alpha = 0.5f), textAlign = TextAlign.Center) },
+                placeholder = { Text("DD", color = Color.Gray, textAlign = TextAlign.Center) },
                 modifier = Modifier.weight(1f),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -937,7 +937,7 @@ private fun Step2Birthday(
         if (year.length == 4) {
             Surface(
                 shape = RoundedCornerShape(50),
-                color = Color.White.copy(alpha = 0.12f),
+                color = Color.White.copy(alpha = 0.95f),
                 modifier = Modifier.align(Alignment.Start)
             ) {
                 Text(
@@ -1057,7 +1057,7 @@ private fun Step3Location(
                     onValueChange = { onCityChange(it, null, null) },
                     textStyle = TextStyle(
                         color = Color.White,
-                        fontSize = 15.sp,
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.Normal
                     ),
                     singleLine = true,
@@ -1066,8 +1066,8 @@ private fun Step3Location(
                         if (city.isEmpty()) {
                             Text(
                                 text = "City, State, Country",
-                                color = Color.White.copy(alpha = 0.5f),
-                                fontSize = 15.sp
+                                color = Color.Gray,
+                                fontSize = 13.sp
                             )
                         }
                         innerTextField()
@@ -1442,7 +1442,7 @@ private fun Step4Photos(
                                     Text(
                                         text = "+",
                                         color = SoftPink,
-                                        fontSize = 28.sp,
+                                        fontSize = 22.sp,
                                         fontWeight = FontWeight.Light
                                     )
                                     Text(
@@ -1531,7 +1531,7 @@ private fun Step5Basics(
         Text(
             text = "A few words about you",
             color = Color.White,
-            fontSize = 15.sp,
+            fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold
         )
         Spacer(modifier = Modifier.height(10.dp))
@@ -1738,7 +1738,7 @@ private fun Step8Prompts(
                     Surface(
                         onClick = { expandedDropdown = true },
                         shape = RoundedCornerShape(14.dp),
-                        color = Color.White.copy(alpha = 0.12f),
+                        color = Color.White.copy(alpha = 0.95f),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
@@ -1750,7 +1750,7 @@ private fun Step8Prompts(
                         ) {
                             Text(
                                 text = prompt.question,
-                                color = Color.White,
+                                color = Color.Black,
                                 fontSize = 14.sp,
                                 modifier = Modifier.weight(1f)
                             )
@@ -1792,12 +1792,12 @@ private fun Step8Prompts(
                         .heightIn(min = 80.dp),
                     shape = RoundedCornerShape(14.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = Color.White.copy(alpha = 0.14f),
-                        unfocusedContainerColor = Color.White.copy(alpha = 0.12f),
+                        focusedContainerColor = Color.White.copy(alpha = 0.95f),
+                        unfocusedContainerColor = Color.White.copy(alpha = 0.9f),
                         focusedBorderColor = AccentPink,
                         unfocusedBorderColor = Color.Transparent,
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
+                        focusedTextColor = Color.Black,
+                        unfocusedTextColor = Color.Black,
                         cursorColor = AccentPink
                     ),
                     maxLines = 3
@@ -1838,15 +1838,15 @@ private fun Step9Preferences(
         Text(
             text = "Fine-tune your matches.",
             color = Color.White,
-            fontSize = 28.sp,
+            fontSize = 22.sp,
             fontWeight = FontWeight.Bold
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "You can always adjust these later. We’ll keep the important stuff simple.",
+            text = "You can adjust these later.",
             color = Color.White.copy(alpha = 0.85f),
-            fontSize = 15.sp,
-            lineHeight = 22.sp
+            fontSize = 13.sp,
+            lineHeight = 18.sp
         )
         Spacer(modifier = Modifier.height(26.dp))
 
@@ -1864,7 +1864,7 @@ private fun Step9Preferences(
             Text(
                 text = "$ageMin – $ageMax",
                 color = SoftPink,
-                fontSize = 15.sp,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.Bold
             )
         }
@@ -1883,21 +1883,21 @@ private fun Step9Preferences(
                     val num = it.toIntOrNull() ?: 18
                     onAgeChange(num.coerceIn(18, ageMax), ageMax)
                 },
-                modifier = Modifier.width(90.dp),
+                modifier = Modifier.width(80.dp),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 shape = RoundedCornerShape(14.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = Color.White.copy(alpha = 0.14f),
-                    unfocusedContainerColor = Color.White.copy(alpha = 0.12f),
+                    focusedContainerColor = Color.White.copy(alpha = 0.95f),
+                    unfocusedContainerColor = Color.White.copy(alpha = 0.9f),
                     focusedBorderColor = AccentPink,
                     unfocusedBorderColor = Color.Transparent,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White
+                    focusedTextColor = Color.Black,
+                    unfocusedTextColor = Color.Black
                 ),
                 textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center, fontSize = 16.sp)
             )
 
-            Text("to", color = Color.White.copy(alpha = 0.7f), fontSize = 14.sp)
+            Text("to", color = Color.White.copy(alpha = 0.7f), fontSize = 13.sp)
 
             OutlinedTextField(
                 value = ageMax.toString(),
@@ -1905,16 +1905,16 @@ private fun Step9Preferences(
                     val num = it.toIntOrNull() ?: 50
                     onAgeChange(ageMin, num.coerceIn(ageMin, 80))
                 },
-                modifier = Modifier.width(90.dp),
+                modifier = Modifier.width(80.dp),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 shape = RoundedCornerShape(14.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = Color.White.copy(alpha = 0.14f),
-                    unfocusedContainerColor = Color.White.copy(alpha = 0.12f),
+                    focusedContainerColor = Color.White.copy(alpha = 0.95f),
+                    unfocusedContainerColor = Color.White.copy(alpha = 0.9f),
                     focusedBorderColor = AccentPink,
                     unfocusedBorderColor = Color.Transparent,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White
+                    focusedTextColor = Color.Black,
+                    unfocusedTextColor = Color.Black
                 ),
                 textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.Center, fontSize = 16.sp)
             )
