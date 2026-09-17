@@ -589,22 +589,25 @@ object SupabaseRepository {
     }
 
     /**
-     * Checks if an email is registered in auth.users. Used by the reset-password
-     * flow to refuse OTP for unregistered emails (instead of silently sending an
-     * OTP that the user can never use).
-     *
-     * Queries the profiles table (registered_email column) — every auth user
-     * gets a profile row via the handle_new_user() trigger on signup.
+     * Checks if an email is registered. Uses the `email_exists()` SECURITY
+     * DEFINER RPC (bypasses RLS) so the anon key can check any email.
+     * Used by the reset-password flow to refuse OTP for unregistered emails.
      */
     suspend fun emailExists(email: String): Boolean = withContext(Dispatchers.IO) {
-        val req = Request.Builder()
-            .url("${SupabaseConfig.REST_BASE}/profiles?registered_email=eq.${email.trim()}")
-            .header("Prefer", "count=exact")
-            .header("Range", "0-0")
-            .get().build()
-        SupabaseClient.http.newCall(req).execute().use { resp ->
-            val range = resp.header("content-range")
-            range?.substringAfter("/")?.toIntOrNull()?.let { it > 0 } ?: false
+        try {
+            val cleanEmail = email.trim()
+            val body = reqAdapter.toJson(mapOf("p_email" to cleanEmail))
+            val req = Request.Builder()
+                .url("${SupabaseConfig.REST_BASE}/rpc/email_exists")
+                .post(body.toRequestBody(json))
+                .build()
+            SupabaseClient.http.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext true // fail open — don't block users on API errors
+                val text = resp.body?.string().orEmpty().trim()
+                text.equals("true", ignoreCase = true)
+            }
+        } catch (e: Exception) {
+            true // fail open — if the check fails, let the OTP flow proceed
         }
     }
 
