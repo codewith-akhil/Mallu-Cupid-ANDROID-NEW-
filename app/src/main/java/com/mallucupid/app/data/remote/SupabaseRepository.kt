@@ -588,6 +588,26 @@ object SupabaseRepository {
         }.getOrDefault(false)
     }
 
+    /**
+     * Checks if an email is registered in auth.users. Used by the reset-password
+     * flow to refuse OTP for unregistered emails (instead of silently sending an
+     * OTP that the user can never use).
+     *
+     * Queries the profiles table (registered_email column) — every auth user
+     * gets a profile row via the handle_new_user() trigger on signup.
+     */
+    suspend fun emailExists(email: String): Boolean = withContext(Dispatchers.IO) {
+        val req = Request.Builder()
+            .url("${SupabaseConfig.REST_BASE}/profiles?registered_email=eq.${email.trim()}")
+            .header("Prefer", "count=exact")
+            .header("Range", "0-0")
+            .get().build()
+        SupabaseClient.http.newCall(req).execute().use { resp ->
+            val range = resp.header("content-range")
+            range?.substringAfter("/")?.toIntOrNull()?.let { it > 0 } ?: false
+        }
+    }
+
     // ---------- DTO → domain mapping ----------
 
     private fun SwipeDeckProfileDto.toDatingProfile(): DatingProfile {

@@ -225,7 +225,7 @@ fun OtpVerificationScreen(
                 // centered horizontally, each ~52.dp wide, spacedBy 12.dp.
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     otp.forEachIndexed { index, value ->
@@ -247,7 +247,7 @@ fun OtpVerificationScreen(
                                 }
                             },
                             modifier = Modifier
-                                .width(52.dp)
+                                .width(44.dp)
                                 .height(if (isCompact) 50.dp else 56.dp)
                                 .focusRequester(focusRequesters[index]),
                             textStyle = LocalTextStyle.current.copy(

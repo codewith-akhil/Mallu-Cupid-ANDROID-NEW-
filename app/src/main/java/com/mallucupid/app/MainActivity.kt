@@ -167,6 +167,13 @@ class MainActivity : ComponentActivity() {
                                 scope.launch {
                                     loadingState = true
                                     try {
+                                        // Check if the email is registered first
+                                        val exists = SupabaseRepository.emailExists(email)
+                                        if (!exists) {
+                                            loadingState = false
+                                            Toast.makeText(this@MainActivity, "No account found with this email. Please sign up first.", Toast.LENGTH_LONG).show()
+                                            return@launch
+                                        }
                                         val err = SupabaseAuth.sendOtp(email)
                                         loadingState = false
                                         if (err != null) {
