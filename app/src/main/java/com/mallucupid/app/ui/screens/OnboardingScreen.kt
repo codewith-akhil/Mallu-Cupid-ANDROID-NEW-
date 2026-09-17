@@ -110,15 +110,16 @@ fun OnboardingScreen(
             1 -> if (draft.gender.isBlank() || draft.lookingFor.isBlank()) {
                 "Choose your identity and who you would like to meet."
             } else ""
-            2 -> {
-                val age = draft.calculatedAge
-                if (draft.birthDay.isBlank() || draft.birthMonth.isBlank() || draft.birthYear.isBlank() || age < 18 || age > 100) {
-                    "You must be 18 or older to join."
-                } else ""
-            }
-            3 -> if (draft.city.trim().isBlank()) {
+            2 -> if (draft.city.trim().isBlank()) {
                 "Add your current city to continue."
             } else ""
+            3 -> {
+                val age = draft.calculatedAge
+                val minAge = draft.countryMinAge
+                if (draft.birthDay.isBlank() || draft.birthMonth.isBlank() || draft.birthYear.isBlank() || age < minAge || age > 100) {
+                    "You must be $minAge or older to join."
+                } else ""
+            }
             4 -> if (draft.photos.size < 3) {
                 "Add at least 3 photos. Your first impression matters."
             } else ""
@@ -200,13 +201,11 @@ fun OnboardingScreen(
                     )
                 }
 
-                AsyncImage(
-                    model = "https://res.cloudinary.com/wxytzoo1/image/upload/v1788918988/Mallucupidlogo.png",
-                    contentDescription = "Mallu Cupid",
-                    modifier = Modifier
-                        .size(54.dp)
-                        .clip(CircleShape),
-                    contentScale = ContentScale.Crop
+                Text(
+                    text = "mc",
+                    color = AccentPink,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
                 )
 
                 Text(
@@ -238,78 +237,31 @@ fun OnboardingScreen(
                 )
             }
 
-            // Scrollable Content — with optional live profile preview alongside the form.
-            // Wide screens (>= 600.dp) get a sticky preview column on the right; compact
-            // screens pin the preview at the top of the scrollable content.
+            // Scrollable Content — no live preview (removed per design request)
             BoxWithConstraints(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(top = 20.dp, bottom = 16.dp)
+                    .padding(top = 12.dp, bottom = 16.dp)
             ) {
-                val showPreview = step in setOf(4, 5, 6, 8)
-                val isWide = maxWidth >= 600.dp
-
-                if (showPreview && isWide) {
-                    // Two-pane layout: form (scrollable) + sticky preview (right)
-                    Row(
-                        modifier = Modifier.fillMaxSize(),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .weight(1f)
-                                .verticalScroll(scrollState)
-                        ) {
-                            Text(
-                                text = "Let’s make your profile feel like you",
-                                color = Color.White.copy(alpha = 0.7f),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Spacer(modifier = Modifier.height(10.dp))
-                            OnboardingStepBody(
-                                step = step,
-                                draft = draft,
-                                onDraftChange = { draft = it },
-                                error = error
-                            )
-                        }
-                        Column(
-                            modifier = Modifier
-                                .weight(1f)
-                                .verticalScroll(previewScrollState)
-                        ) {
-                            Spacer(modifier = Modifier.height(20.dp))
-                            LiveProfilePreviewCard(draft)
-                        }
-                    }
-                } else {
-                    // Single column, with the preview pinned at the top of the form
-                    // when shown (so it scrolls together with the step content).
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(scrollState)
-                    ) {
-                        Text(
-                            text = "Let’s make your profile feel like you",
-                            color = Color.White.copy(alpha = 0.7f),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        if (showPreview) {
-                            LiveProfilePreviewCard(draft)
-                            Spacer(modifier = Modifier.height(16.dp))
-                        }
-                        OnboardingStepBody(
-                            step = step,
-                            draft = draft,
-                            onDraftChange = { draft = it },
-                            error = error
-                        )
-                    }
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(scrollState)
+                ) {
+                    Text(
+                        text = "Let's make your profile feel like you",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OnboardingStepBody(
+                        step = step,
+                        draft = draft,
+                        onDraftChange = { draft = it },
+                        error = error
+                    )
                 }
             }
 
@@ -324,11 +276,11 @@ fun OnboardingScreen(
                     onClick = { handleNext() },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(54.dp),
+                        .height(48.dp),
                     shape = RoundedCornerShape(50),
                     colors = ButtonDefaults.buttonColors(containerColor = AccentPink),
-                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 8.dp),
-                    enabled = !isSaving
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp),
+                    enabled = !isSaving && validate().isBlank()
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -336,7 +288,7 @@ fun OnboardingScreen(
                     ) {
                         Text(
                             text = if (step < TOTAL_STEPS) "Continue" else if (isSaving) "Saving profile..." else "Finish my profile",
-                            fontSize = 17.sp,
+                            fontSize = 15.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = Color.White
                         )
@@ -387,7 +339,13 @@ private fun OnboardingStepBody(
             lookingFor = draft.lookingFor,
             onLookingForChange = { onDraftChange(draft.copy(lookingFor = it)) }
         )
-        2 -> Step2Birthday(
+        2 -> Step3Location(
+            city = draft.city,
+            onCityChange = { city, lat, lng -> onDraftChange(draft.copy(city = city, latitude = lat, longitude = lng)) },
+            distance = draft.distance,
+            onDistanceChange = { onDraftChange(draft.copy(distance = it)) }
+        )
+        3 -> Step2Birthday(
             day = draft.birthDay,
             month = draft.birthMonth,
             year = draft.birthYear,
@@ -395,12 +353,6 @@ private fun OnboardingStepBody(
             onMonthChange = { onDraftChange(draft.copy(birthMonth = it)) },
             onYearChange = { onDraftChange(draft.copy(birthYear = it)) },
             age = draft.calculatedAge
-        )
-        3 -> Step3Location(
-            city = draft.city,
-            onCityChange = { city, lat, lng -> onDraftChange(draft.copy(city = city, latitude = lat, longitude = lng)) },
-            distance = draft.distance,
-            onDistanceChange = { onDraftChange(draft.copy(distance = it)) }
         )
         4 -> Step4Photos(
             photos = draft.photos,

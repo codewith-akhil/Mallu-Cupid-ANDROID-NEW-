@@ -18,6 +18,7 @@ data class OnboardingDraft(
     val city: String = "",
     val country: String = "",
     val countryIsoCode: String = "",
+    val countryMinAge: Int = 18,
     val latitude: Double? = null,
     val longitude: Double? = null,
     val distance: Int = 25,
@@ -85,8 +86,8 @@ data class OnboardingDraft(
 ) {
     val calculatedAge: Int
         get() {
-            val y = birthYear.toIntOrNull() ?: 1998
-            return (2026 - y).coerceIn(18, 99)
+            val y = birthYear.toIntOrNull() ?: return 0
+            return (java.time.LocalDate.now().year - y).coerceIn(0, 100)
         }
 }
 
