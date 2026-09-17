@@ -29,9 +29,17 @@ import kotlinx.coroutines.launch
 
 // Email regex — mirrors the private helper in AuthScreens so ResetPasswordScreen
 // can validate without depending on that file's private API.
-private val resetEmailRegex = Regex("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\$")
-
-private fun isValidResetEmail(email: String): Boolean = resetEmailRegex.matches(email)
+// Same simple check — no regex. Must have @ and a dot after it.
+private fun isValidResetEmail(email: String): Boolean {
+    val trimmed = email.trim()
+    if (trimmed.isEmpty()) return false
+    val atIndex = trimmed.indexOf('@')
+    if (atIndex < 1) return false
+    val afterAt = trimmed.substring(atIndex + 1)
+    if (!afterAt.contains('.')) return false
+    if (afterAt.length < 3) return false
+    return true
+}
 
 
 @Composable

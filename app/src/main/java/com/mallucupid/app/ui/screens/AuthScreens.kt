@@ -474,9 +474,20 @@ fun AuthTextField(
     }
 }
 
-private val emailRegex = Regex("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\$")
-
-private fun isValidEmail(email: String): Boolean = emailRegex.matches(email)
+// Dead-simple email check: must contain @ and a . after it.
+// No regex — let Supabase decide if the email is actually deliverable.
+// This prevents false rejections from invisible characters, keyboard
+// autocomplete quirks, or unusual but valid email formats.
+private fun isValidEmail(email: String): Boolean {
+    val trimmed = email.trim()
+    if (trimmed.isEmpty()) return false
+    val atIndex = trimmed.indexOf('@')
+    if (atIndex < 1) return false  // must have something before @
+    val afterAt = trimmed.substring(atIndex + 1)
+    if (!afterAt.contains('.')) return false  // must have a dot after @
+    if (afterAt.length < 3) return false  // shortest valid: x.xx
+    return true
+}
 
 @Composable
 fun AuthButton(
