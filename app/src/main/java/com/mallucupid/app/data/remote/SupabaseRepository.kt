@@ -4,7 +4,9 @@ import com.mallucupid.app.data.DatingProfile
 import com.mallucupid.app.data.OnboardingDraft
 import com.mallucupid.app.data.PromptItem
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import com.mallucupid.app.data.remote.SupabaseClient.moshi
 import com.squareup.moshi.Types
@@ -608,6 +610,81 @@ object SupabaseRepository {
             }
         } catch (e: Exception) {
             true // fail open — if the check fails, let the OTP flow proceed
+        }
+    }
+
+    /**
+     * Uploads a profile photo to Supabase Storage (bucket: profile-photos).
+     * Path: {userId}/{timestamp}.jpg
+     * Returns the public URL on success, or null on failure.
+     */
+    suspend fun uploadPhoto(userId: String, photoUri: android.net.Uri): String? = withContext(Dispatchers.IO) {
+        try {
+            val context = com.mallucupid.app.MalluCupidApp.appContext
+            val inputStream = context.contentResolver.openInputStream(photoUri) ?: return@withContext null
+            val bytes = inputStream.readBytes()
+            inputStream.close()
+
+            val fileName = "${System.currentTimeMillis()}.jpg"
+            val storagePath = "$userId/$fileName"
+            val mimeType = context.contentResolver.getType(photoUri) ?: "image/jpeg"
+            val mediaType = mimeType.toMediaType()
+            val requestBody = bytes.toRequestBody(mediaType)
+
+            val req = Request.Builder()
+                .url("${SupabaseConfig.SUPABASE_URL}/storage/v1/object/profile-photos/$storagePath")
+                .header("Content-Type", mimeType)
+                .header("x-upsert", "false")
+                .post(requestBody)
+                .build()
+
+            SupabaseClient.http.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext null
+                // Return the public URL
+                "${SupabaseConfig.SUPABASE_URL}/storage/v1/object/public/profile-photos/$storagePath"
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    // ---------- Countries ----------
+
+    suspend fun getCountries(): List<CountryDto> = withContext(Dispatchers.IO) {
+        try {
+            val req = Request.Builder()
+                .url("${SupabaseConfig.REST_BASE}/countries?select=id,name,iso_code,min_age&order=name.asc")
+                .get().build()
+            SupabaseClient.http.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext emptyList()
+                val type = Types.newParameterizedType(List::class.java, CountryDto::class.java)
+                val adapter = moshi.adapter<List<CountryDto>>(type)
+                adapter.fromJson(resp.body?.string().orEmpty()).orEmpty()
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
+     * Returns the minimum age for a country by ISO code. Falls back to 18 if
+     * the country is not found or the call fails.
+     */
+    suspend fun getMinAgeForCountry(isoCode: String): Int = withContext(Dispatchers.IO) {
+        try {
+            val req = Request.Builder()
+                .url("${SupabaseConfig.REST_BASE}/countries?iso_code=eq.$isoCode&select=min_age")
+                .get().build()
+            SupabaseClient.http.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext 18
+                val text = resp.body?.string().orEmpty()
+                val type = Types.newParameterizedType(List::class.java, CountryDto::class.java)
+                val adapter = moshi.adapter<List<CountryDto>>(type)
+                val list = adapter.fromJson(text).orEmpty()
+                list.firstOrNull()?.minAge ?: 18
+            }
+        } catch (e: Exception) {
+            18
         }
     }
 

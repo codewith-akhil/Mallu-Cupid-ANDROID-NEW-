@@ -301,3 +301,13 @@ data class SubscriptionDto(
     @Json(name = "google_purchase_token") val googlePurchaseToken: String? = null,
     @Json(name = "google_product_id") val googleProductId: String? = null,
 )
+
+// ---------- Countries (for onboarding + age validation) ----------
+
+@JsonClass(generateAdapter = true)
+data class CountryDto(
+    val id: Int? = null,
+    val name: String? = null,
+    @Json(name = "iso_code") val isoCode: String? = null,
+    @Json(name = "min_age") val minAge: Int? = null,
+)
