@@ -35,6 +35,13 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="29" />
 
+    <!-- ── Advertising ID (Android 13+ requirement — Play Console declaration) ── -->
+    <!-- Required for apps targeting SDK 33+ that reference the advertising ID.
+         Firebase + Google SDKs may reference it. Declared here for Play Console
+         compliance. The app does NOT use ads for tracking — declare "No" in
+         Play Console → Policy → App content → Advertising ID. -->
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID" />
+
     <!-- ── Hardware features (all optional — app works without them) ── -->
     <uses-feature
         android:name="android.hardware.camera"

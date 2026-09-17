@@ -34,7 +34,8 @@ import com.mallucupid.app.ui.theme.*
 fun SignInScreen(
     onSignIn: (String, String) -> Unit,
     onGoToSignUp: () -> Unit,
-    onForgotPassword: () -> Unit
+    onForgotPassword: () -> Unit,
+    loading: Boolean = false
 ) {
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -42,7 +43,6 @@ fun SignInScreen(
     var emailErrorText by remember { mutableStateOf<String?>(null) }
     var passwordError by remember { mutableStateOf(false) }
     var passwordErrorText by remember { mutableStateOf<String?>(null) }
-    var loading by remember { mutableStateOf(false) }
 
     AuthBackground {
         if (loading) {
@@ -88,7 +88,7 @@ fun SignInScreen(
 
                 AuthTextField(
                     value = email,
-                    onValueChange = { if (loading) loading = false
+                    onValueChange = {
                         email = it
                         if (emailError) {
                             emailError = false
@@ -105,7 +105,7 @@ fun SignInScreen(
 
                 AuthTextField(
                     value = password,
-                    onValueChange = { if (loading) loading = false
+                    onValueChange = {
                         password = it
                         if (passwordError) {
                             passwordError = false
@@ -150,7 +150,6 @@ fun SignInScreen(
                         passwordError = password.length < 6
                         passwordErrorText = if (passwordError) "Minimum 6 characters" else null
                         if (!emailError && !passwordError) {
-                            loading = true
                             onSignIn(email, password)
                         }
                     },
@@ -188,7 +187,8 @@ fun SignInScreen(
 @Composable
 fun SignUpScreen(
     onContinue: (String, String, String) -> Unit,
-    onGoToSignIn: () -> Unit
+    onGoToSignIn: () -> Unit,
+    loading: Boolean = false
 ) {
     var name by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
@@ -198,7 +198,6 @@ fun SignUpScreen(
     var emailErrorText by remember { mutableStateOf<String?>(null) }
     var passwordError by remember { mutableStateOf(false) }
     var passwordErrorText by remember { mutableStateOf<String?>(null) }
-    var loading by remember { mutableStateOf(false) }
 
     AuthBackground {
         if (loading) {
@@ -244,7 +243,7 @@ fun SignUpScreen(
 
                 AuthTextField(
                     value = name,
-                    onValueChange = { if (loading) loading = false
+                    onValueChange = {
                         if (it.length <= 50) {
                             name = it
                             if (nameError) nameError = false
@@ -259,7 +258,7 @@ fun SignUpScreen(
 
                 AuthTextField(
                     value = email,
-                    onValueChange = { if (loading) loading = false
+                    onValueChange = {
                         email = it
                         if (emailError) {
                             emailError = false
@@ -276,7 +275,7 @@ fun SignUpScreen(
 
                 AuthTextField(
                     value = password,
-                    onValueChange = { if (loading) loading = false
+                    onValueChange = {
                         password = it
                         if (passwordError) {
                             passwordError = false
@@ -338,7 +337,6 @@ fun SignUpScreen(
                         passwordError = !passwordValid
                         passwordErrorText = if (passwordError) "Please meet all password requirements" else null
                         if (!nameError && !emailError && !passwordError) {
-                            loading = true
                             onContinue(name, email, password)
                         }
                     },

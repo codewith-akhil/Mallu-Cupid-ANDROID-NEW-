@@ -37,12 +37,12 @@ private fun isValidResetEmail(email: String): Boolean = resetEmailRegex.matches(
 @Composable
 fun ResetPasswordScreen(
     onSendOtp: (String) -> Unit,
-    onBackToSignIn: () -> Unit
+    onBackToSignIn: () -> Unit,
+    loading: Boolean = false
 ) {
     var email by remember { mutableStateOf("") }
     var emailError by remember { mutableStateOf(false) }
     var emailErrorText by remember { mutableStateOf<String?>(null) }
-    var loading by remember { mutableStateOf(false) }
 
     AuthBackground {
         if (loading) {
@@ -88,7 +88,7 @@ fun ResetPasswordScreen(
 
                 AuthTextField(
                     value = email,
-                    onValueChange = { if (loading) loading = false
+                    onValueChange = {
                         email = it
                         if (emailError) {
                             emailError = false
@@ -109,7 +109,6 @@ fun ResetPasswordScreen(
                         emailError = !isValidResetEmail(email)
                         emailErrorText = if (emailError) "Enter a valid email address" else null
                         if (!emailError) {
-                            loading = true
                             onSendOtp(email)
                         }
                     },
@@ -137,13 +136,13 @@ fun ResetPasswordScreen(
 fun OtpVerificationScreen(
     email: String,
     otpContext: String,
-    onVerified: () -> Unit,
-    onBack: () -> Unit
+    onVerified: (String) -> Unit,
+    onBack: () -> Unit,
+    loading: Boolean = false
 ) {
     var otp by remember { mutableStateOf(List(6) { "" }) }
     var resendSeconds by remember { mutableStateOf(60) }
     var resendTrigger by remember { mutableStateOf(0) }
-    var loading by remember { mutableStateOf(false) }
     var resending by remember { mutableStateOf(false) }
     val focusRequesters = List(6) { remember { FocusRequester() } }
     val context = LocalContext.current
@@ -164,7 +163,7 @@ fun OtpVerificationScreen(
             delay(200)
             // Re-check in case the user cleared a box during the delay window.
             if (otp.all { it.isNotEmpty() }) {
-                loading = true
+                onVerified(otp.joinToString(""))
             }
         }
     }
@@ -267,7 +266,7 @@ fun OtpVerificationScreen(
                     text = "Verify OTP",
                     onClick = {
                         if (otp.joinToString("").length == 6) {
-                            loading = true
+                            onVerified(otp.joinToString(""))
                         }
                     },
                     enabled = !loading,
@@ -310,29 +309,9 @@ fun OtpVerificationScreen(
         }
     }
 
-    // Verify flow — SupabaseAuth.verifyOtp returns null on success, or a
-    // user-friendly error message. On success we toast a context-aware message
-    // (signup vs reset) and then call onVerified().
-    LaunchedEffect(loading) {
-        if (loading) {
-            val code = otp.joinToString("")
-            val err = SupabaseAuth.verifyOtp(email, code)
-            loading = false
-            if (err == null) {
-                val msg = if (otpContext == "signup")
-                    "Email verified! Setting up your profile..."
-                else
-                    "Email verified! Set your new password."
-                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                onVerified()
-            } else {
-                Toast.makeText(context, err, Toast.LENGTH_SHORT).show()
-                // Clear the boxes so the user can try again, and refocus the first box.
-                otp = List(6) { "" }
-                focusRequesters.firstOrNull()?.requestFocus()
-            }
-        }
-    }
+    // OTP verification is handled by the parent (MainActivity) via onVerified(code).
+    // The parent calls SupabaseAuth.verifyOtp(email, code) + navigates on success,
+    // or shows a Toast on failure. The screen just passes the code up.
 }
 
 
@@ -340,11 +319,11 @@ fun OtpVerificationScreen(
 fun NewPasswordScreen(
     email: String,
     onSubmit: (String, String) -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    loading: Boolean = false
 ) {
     var newPassword by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
-    var loading by remember { mutableStateOf(false) }
     var mismatch by remember { mutableStateOf(false) }
 
     AuthBackground {
@@ -392,7 +371,7 @@ fun NewPasswordScreen(
                 // New password — AuthTextField handles the eye toggle (isPassword = true).
                 AuthTextField(
                     value = newPassword,
-                    onValueChange = { if (loading) loading = false
+                    onValueChange = {
                         newPassword = it
                         if (mismatch) mismatch = false
                     },
@@ -406,7 +385,7 @@ fun NewPasswordScreen(
                 // Confirm password — same eye toggle. isError drives the mismatch message.
                 AuthTextField(
                     value = confirmPassword,
-                    onValueChange = { if (loading) loading = false
+                    onValueChange = {
                         confirmPassword = it
                         if (mismatch) mismatch = false
                     },
@@ -463,7 +442,6 @@ fun NewPasswordScreen(
                         val matches = newPassword == confirmPassword && confirmPassword.isNotEmpty()
                         mismatch = !matches
                         if (passed && matches) {
-                            loading = true
                             onSubmit(email, newPassword)
                         }
                     },

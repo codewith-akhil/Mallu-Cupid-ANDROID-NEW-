@@ -11,9 +11,48 @@
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
-const RESEND_FROM = Deno.env.get("RESEND_FROM") ?? "Mallu Cupid <no-reply@mallucupid.app>";
-const ALLOW_DEV_CODE = Deno.env.get("ALLOW_DEV_CODE") === "true";
+
+// ── Secret loader ──────────────────────────────────────────────────────────
+// Edge function env vars are normally set via the Supabase Dashboard / CLI.
+// As a fallback (when env vars aren't set), read from the vault.decrypted_secrets
+// table via the PostgREST API. This lets us set secrets via the DB connection
+// when the Management API / CLI isn't available.
+async function loadSecret(name: string): Promise<string | null> {
+  // 1. Try env var first (fastest, no DB round-trip)
+  const env = Deno.env.get(name);
+  if (env) return env;
+  // 2. Fall back to the get_secret() RPC (reads from vault.decrypted_secrets)
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/get_secret`, {
+      method: "POST",
+      headers: {
+        apikey: SERVICE_ROLE,
+        Authorization: `Bearer ${SERVICE_ROLE}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ p_name: name }),
+    });
+    if (res.ok) {
+      const text = await res.text();
+      if (text && text !== "null") return text.replace(/^"|"$/g, "");
+    }
+  } catch (e) {
+    console.error(`vault lookup for ${name} failed:`, e);
+  }
+  return null;
+}
+
+// Eagerly load the secrets we need (kept as module-level consts for the
+// original code shape). Wrapped in an async IIFE so the function waits for
+// them on the first invocation.
+let RESEND_API_KEY: string | null = null;
+let RESEND_FROM: string | null = null;
+let ALLOW_DEV_CODE = false;
+const _secretsLoaded = (async () => {
+  RESEND_API_KEY = await loadSecret("RESEND_API_KEY");
+  RESEND_FROM = await loadSecret("RESEND_FROM");
+  ALLOW_DEV_CODE = (await loadSecret("ALLOW_DEV_CODE")) === "true";
+})();
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -105,6 +144,9 @@ async function checkIPRateLimit(ip: string): Promise<boolean> {
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
+
+  // Ensure secrets are loaded from env or vault before handling the request.
+  await _secretsLoaded;
 
   let email: string | undefined;
   try {

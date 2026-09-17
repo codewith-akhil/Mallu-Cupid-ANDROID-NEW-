@@ -130,7 +130,9 @@ fun PremiumSubscriptionFlow(
     var billingClient by remember { mutableStateOf<BillingClient?>(null) }
     DisposableEffect(Unit) {
         val client = BillingClient.newBuilder(context)
-            .enablePendingPurchases()
+            .enablePendingPurchases(
+                PendingPurchasesParams.newBuilder().enableOneTimeProducts().build()
+            )
             .setListener(purchasesListener)
             .build()
         billingClient = client
@@ -168,41 +170,50 @@ fun PremiumSubscriptionFlow(
                 )
             )
             .build()
-        client.queryProductDetailsAsync(queryParams) { result, productDetailsList ->
-            if (result.responseCode != BillingClient.BillingResponseCode.OK || productDetailsList.isEmpty()) {
-                isProcessing = false
-                currentStep = PremiumFlowStep.OFFER
-                Toast.makeText(context, "Unable to load plan details. Please try again.", Toast.LENGTH_LONG).show()
-                return@queryProductDetailsAsync
+        client.queryProductDetailsAsync(
+            queryParams,
+            object : ProductDetailsResponseListener {
+                override fun onProductDetailsResponse(
+                    result: BillingResult,
+                    productDetailsResult: QueryProductDetailsResult
+                ) {
+                    val productDetailsList = productDetailsResult.productDetailsList
+                    if (result.responseCode != BillingClient.BillingResponseCode.OK || productDetailsList.isEmpty()) {
+                        isProcessing = false
+                        currentStep = PremiumFlowStep.OFFER
+                        Toast.makeText(context, "Unable to load plan details. Please try again.", Toast.LENGTH_LONG).show()
+                        return
+                    }
+                    val productDetails = productDetailsList[0]
+                    val offerToken = productDetails.subscriptionOfferDetails
+                        ?.firstOrNull()
+                        ?.offerToken
+                    val productParamsBuilder = BillingFlowParams.ProductDetailsParams.newBuilder()
+                        .setProductDetails(productDetails)
+                    if (offerToken != null && offerToken.isNotEmpty()) {
+                        productParamsBuilder.setOfferToken(offerToken)
+                    }
+                    val flowParams = BillingFlowParams.newBuilder()
+                        .setProductDetailsParamsList(listOf(productParamsBuilder.build()))
+                        .build()
+                    val activity = context as? Activity
+                    if (activity == null) {
+                        isProcessing = false
+                        currentStep = PremiumFlowStep.OFFER
+                        Toast.makeText(context, "Unable to launch payment flow.", Toast.LENGTH_LONG).show()
+                        return
+                    }
+                    val launchResult = client.launchBillingFlow(activity, flowParams)
+                    if (launchResult.responseCode != BillingClient.BillingResponseCode.OK) {
+                        isProcessing = false
+                        currentStep = PremiumFlowStep.OFFER
+                        Toast.makeText(context, "Unable to start payment. Please try again.", Toast.LENGTH_LONG).show()
+                    }
+                    // Otherwise: onPurchasesUpdated fires via purchasesListener with the
+                    // final result (success, cancellation, or failure).
+                }
             }
-            val productDetails = productDetailsList.first()
-            val offerToken = productDetails.subscriptionOfferDetails
-                ?.firstOrNull()
-                ?.offerToken
-            val productParamsBuilder = BillingFlowParams.ProductDetailsParams.newBuilder()
-                .setProductDetails(productDetails)
-            if (!offerToken.isNullOrEmpty()) {
-                productParamsBuilder.setOfferToken(offerToken)
-            }
-            val flowParams = BillingFlowParams.newBuilder()
-                .setProductDetailsParamsList(listOf(productParamsBuilder.build()))
-                .build()
-            val activity = context as? Activity
-            if (activity == null) {
-                isProcessing = false
-                currentStep = PremiumFlowStep.OFFER
-                Toast.makeText(context, "Unable to launch payment flow.", Toast.LENGTH_LONG).show()
-                return@queryProductDetailsAsync
-            }
-            val launchResult = client.launchBillingFlow(activity, flowParams)
-            if (launchResult.responseCode != BillingClient.BillingResponseCode.OK) {
-                isProcessing = false
-                currentStep = PremiumFlowStep.OFFER
-                Toast.makeText(context, "Unable to start payment. Please try again.", Toast.LENGTH_LONG).show()
-            }
-            // Otherwise: onPurchasesUpdated fires via purchasesListener with the
-            // final result (success, cancellation, or failure).
-        }
+        )
     }
 
     Scaffold(

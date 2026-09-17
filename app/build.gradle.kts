@@ -17,8 +17,8 @@ android {
     applicationId = "com.mallucupid.connect"
     minSdk = 26
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0.0"
+    versionCode = 2
+    versionName = "1.0.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -27,9 +27,9 @@ android {
     create("release") {
       val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/mallucupid-connect-key.jks"
       storeFile = file(keystorePath)
-      storePassword = System.getenv("STORE_PASSWORD") ?: "6RuQ2T0D8oRv4FSzSsh0sAoV7Ygo"
+      storePassword = System.getenv("STORE_PASSWORD") ?: "zje-uPTyawUoiRHaZhjASPCJKc1pUN2k"
       keyAlias = System.getenv("KEY_ALIAS") ?: "mallucupid"
-      keyPassword = System.getenv("KEY_PASSWORD") ?: "6RuQ2T0D8oRv4FSzSsh0sAoV7Ygo"
+      keyPassword = System.getenv("KEY_PASSWORD") ?: "zje-uPTyawUoiRHaZhjASPCJKc1pUN2k"
     }
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")
