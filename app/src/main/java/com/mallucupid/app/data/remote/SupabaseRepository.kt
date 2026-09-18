@@ -717,4 +717,23 @@ object SupabaseRepository {
             interests = interests ?: emptyList(),
         )
     }
+
+    // ---------- Profile Options (DB-driven dropdowns) ----------
+
+    suspend fun getProfileOptions(category: String): List<String> = withContext(Dispatchers.IO) {
+        try {
+            val req = Request.Builder()
+                .url("${SupabaseConfig.REST_BASE}/profile_options?category=eq.$category&select=value&order=sort_order.asc")
+                .get().build()
+            SupabaseClient.http.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext emptyList()
+                val type = Types.newParameterizedType(List::class.java, Map::class.java)
+                @Suppress("UNCHECKED_CAST")
+                val list = moshi.adapter<List<Map<String, Any?>>>(type).fromJson(resp.body?.string().orEmpty()).orEmpty()
+                list.mapNotNull { it["value"] as? String }
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
 }

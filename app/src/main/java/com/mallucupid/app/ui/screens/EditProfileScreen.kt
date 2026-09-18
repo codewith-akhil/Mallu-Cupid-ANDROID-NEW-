@@ -57,6 +57,7 @@ import com.mallucupid.app.data.DatingProfile
 import com.mallucupid.app.data.OnboardingDraft
 import com.mallucupid.app.data.PromptItem
 import com.mallucupid.app.location.LocationHelper
+import com.mallucupid.app.data.remote.SupabaseRepository
 import com.mallucupid.app.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -74,6 +75,28 @@ fun EditProfileScreen(
     val coroutineScope = rememberCoroutineScope()
 
     var draft by remember { mutableStateOf(initialDraft) }
+    var isSaving by remember { mutableStateOf(false) }
+    var isUploadingPhotos by remember { mutableStateOf(false) }
+    var dbGenderOptions by remember { mutableStateOf(listOf("Man", "Woman", "Transman", "Transwoman", "Non-binary")) }
+    var dbLookingForOptions by remember { mutableStateOf(listOf("Serious relationship", "Casual relationship", "Dating", "New friends")) }
+    var dbMaritalStatusOptions by remember { mutableStateOf(listOf("Single", "Never Married", "Divorced", "Separated", "Widowed")) }
+    var dbFamilyPlansOptions by remember { mutableStateOf(listOf("Want children", "Don't want children", "Not sure yet")) }
+    var dbPetsOptions by remember { mutableStateOf(listOf("Dog lover", "Cat lover", "Pet-free")) }
+    var dbDrinkingOptions by remember { mutableStateOf(listOf("Not for me", "Socially", "Sober")) }
+    var dbSmokingOptions by remember { mutableStateOf(listOf("Non-smoker", "Smoker", "Trying to quit")) }
+
+    // Fetch dropdown options from DB on load
+    LaunchedEffect(Unit) {
+        coroutineScope.launch {
+            dbGenderOptions = SupabaseRepository.getProfileOptions("gender").ifEmpty { dbGenderOptions }
+            dbLookingForOptions = SupabaseRepository.getProfileOptions("looking_for").ifEmpty { dbLookingForOptions }
+            dbMaritalStatusOptions = SupabaseRepository.getProfileOptions("marital_status").ifEmpty { dbMaritalStatusOptions }
+            dbFamilyPlansOptions = SupabaseRepository.getProfileOptions("family_plans").ifEmpty { dbFamilyPlansOptions }
+            dbPetsOptions = SupabaseRepository.getProfileOptions("pets").ifEmpty { dbPetsOptions }
+            dbDrinkingOptions = SupabaseRepository.getProfileOptions("drinking").ifEmpty { dbDrinkingOptions }
+            dbSmokingOptions = SupabaseRepository.getProfileOptions("smoking").ifEmpty { dbSmokingOptions }
+        }
+    }
     var selectedTab by remember { mutableStateOf("Edit") } // "Edit" or "Preview"
 
     // Active target slot for single-photo replacement (null means append)
@@ -106,16 +129,26 @@ fun EditProfileScreen(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            val uriString = uri.toString()
-            val slot = targetPhotoSlot
-            if (slot != null && slot < draft.photos.size) {
-                val updated = draft.photos.toMutableList()
-                updated[slot] = uriString
-                draft = draft.copy(photos = updated)
-            } else {
-                draft = draft.copy(photos = (draft.photos + uriString).take(9))
+            isUploadingPhotos = true
+            coroutineScope.launch {
+                val session = com.mallucupid.app.data.remote.SessionManager.current()
+                val userId = session?.userId
+                if (userId != null) {
+                    val uploadedUrl = SupabaseRepository.uploadPhoto(userId, uri)
+                    if (uploadedUrl != null) {
+                        val slot = targetPhotoSlot
+                        if (slot != null && slot < draft.photos.size) {
+                            val updated = draft.photos.toMutableList()
+                            updated[slot] = uploadedUrl
+                            draft = draft.copy(photos = updated)
+                        } else {
+                            draft = draft.copy(photos = (draft.photos + uploadedUrl).take(9))
+                        }
+                    }
+                }
+                isUploadingPhotos = false
+                targetPhotoSlot = null
             }
-            targetPhotoSlot = null
         }
     }
 
@@ -123,9 +156,21 @@ fun EditProfileScreen(
         contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 9)
     ) { uris: List<Uri> ->
         if (uris.isNotEmpty()) {
-            val newUrls = uris.map { it.toString() }
-            val merged = (draft.photos + newUrls).distinct().take(9)
-            draft = draft.copy(photos = merged)
+            isUploadingPhotos = true
+            coroutineScope.launch {
+                val session = com.mallucupid.app.data.remote.SessionManager.current()
+                val userId = session?.userId
+                if (userId != null) {
+                    val uploadedUrls = uris.mapNotNull { uri ->
+                        SupabaseRepository.uploadPhoto(userId, uri)
+                    }
+                    if (uploadedUrls.isNotEmpty()) {
+                        val merged = (draft.photos + uploadedUrls).distinct().take(9)
+                        draft = draft.copy(photos = merged)
+                    }
+                }
+                isUploadingPhotos = false
+            }
         }
     }
 
@@ -142,7 +187,7 @@ fun EditProfileScreen(
                 } else {
                     // FusedLocationProviderClient could not obtain a fresh fix
                     // (emulator, indoor, or permission revoked at runtime).
-                    draft = draft.copy(city = "Location unavailable", latitude = null, longitude = null)
+                    draft = draft.copy(city = "", latitude = null, longitude = null)
                     locationFeedbackMessage = "Location detection failed. Please enter your city manually."
                 }
                 isFetchingLocation = false
@@ -204,7 +249,8 @@ fun EditProfileScreen(
                     )
 
                     Button(
-                        onClick = { onSaveAndClose(draft) },
+                        onClick = { isSaving = true; onSaveAndClose(draft) },
+                        enabled = !isSaving && !isUploadingPhotos,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = DashboardTerracotta,
                             contentColor = Color.White
@@ -790,7 +836,7 @@ fun EditProfileScreen(
                     subtitle = "Select your identified gender",
                     icon = Icons.Default.Wc
                 ) {
-                    val genderOptions = listOf("Man", "Woman", "Transman", "Transwoman", "Non-binary")
+                    val genderOptions = dbGenderOptions
                     SelectableChipRow(
                         options = genderOptions,
                         selectedOption = draft.gender,
@@ -1018,7 +1064,7 @@ fun EditProfileScreen(
                         // Marital Status
                         OptionSelectorGroup(
                             title = "Marital Status",
-                            options = listOf("Single", "Never Married", "In a Relationship", "Divorced", "Separated", "Widowed"),
+                            options = dbMaritalStatusOptions,
                             selected = draft.maritalStatus,
                             onSelect = { draft = draft.copy(maritalStatus = it) }
                         )
@@ -1028,7 +1074,7 @@ fun EditProfileScreen(
                         // Family Plans
                         OptionSelectorGroup(
                             title = "Family Plans",
-                            options = listOf("Want children", "Don't want children", "Have children & want more", "Have children & don't want more", "Not sure yet"),
+                            options = dbFamilyPlansOptions,
                             selected = draft.familyPlans,
                             onSelect = { draft = draft.copy(familyPlans = it) }
                         )
@@ -1038,7 +1084,7 @@ fun EditProfileScreen(
                         // Pets
                         OptionSelectorGroup(
                             title = "Pets",
-                            options = listOf("Dog lover", "Cat lover", "Have pets", "Don't have, but love pets", "Pet-free", "Allergic to pets"),
+                            options = dbPetsOptions,
                             selected = draft.pets,
                             onSelect = { draft = draft.copy(pets = it) }
                         )
@@ -1048,7 +1094,7 @@ fun EditProfileScreen(
                         // Drinking
                         OptionSelectorGroup(
                             title = "Drinking Habits",
-                            options = listOf("Not for me", "Sober", "Socially", "Regularly", "On special occasions"),
+                            options = dbDrinkingOptions,
                             selected = draft.drinking,
                             onSelect = { draft = draft.copy(drinking = it) }
                         )
@@ -1058,7 +1104,7 @@ fun EditProfileScreen(
                         // Smoking
                         OptionSelectorGroup(
                             title = "Smoking Habits",
-                            options = listOf("Non-smoker", "Social smoker", "Smoker", "Trying to quit"),
+                            options = dbSmokingOptions,
                             selected = draft.smoking,
                             onSelect = { draft = draft.copy(smoking = it) }
                         )
