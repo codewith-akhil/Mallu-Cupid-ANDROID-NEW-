@@ -34,12 +34,9 @@ fun ProfileViewContent(
     onOpenSettings: () -> Unit,
     onSignOut: () -> Unit,
     onOpenFaceVerification: () -> Unit = {},
-    onOpenPremiumFlow: () -> Unit = {},
     onShowSystemScreen: ((String) -> Unit)? = null
 ) {
     val scrollState = rememberScrollState()
-    var subscriptionCardIndex by remember { mutableIntStateOf(0) } // 0: Premium (₹49/wk), 1: Gold, 2: Platinum
-    var showFeaturesModal by remember { mutableStateOf(false) }
     // Sign-out confirmation dialog state
     var showSignOutDialog by remember { mutableStateOf(false) }
     var signingOut by remember { mutableStateOf(false) }
@@ -69,26 +66,44 @@ fun ProfileViewContent(
             }
         }
 
-        // User Avatar & Verified Name (Matches screenshot 12: Akhil P ✔)
+        // User Profile Photo — 4:5 portrait card (user requirement: NOT a round card)
         Column(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Box(
                 modifier = Modifier
-                    .size(110.dp)
-                    .clip(CircleShape)
+                    .fillMaxWidth()
+                    .padding(horizontal = 48.dp)
+                    .aspectRatio(0.8f) // 4:5 like Tinder profile cards
+                    .clip(RoundedCornerShape(24.dp))
             ) {
                 val photoUrl = userDraft.photos.firstOrNull()
-                    ?: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=800&q=80"
-                AsyncImage(
-                    model = photoUrl,
-                    contentDescription = userDraft.name,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
+                if (photoUrl != null) {
+                    AsyncImage(
+                        model = photoUrl,
+                        contentDescription = userDraft.name,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    // No photo yet — neutral placeholder instead of a hardcoded fake avatar.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color(0xFFEDE7E1)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Person,
+                            contentDescription = "No profile photo",
+                            tint = Color(0xFFB9AFA6),
+                            modifier = Modifier.size(64.dp)
+                        )
+                    }
+                }
 
-                // Verified Badge at bottom right of avatar
+                // Verified Badge at bottom right of photo
                 if (userDraft.isVerified) {
                     Surface(
                         shape = CircleShape,
@@ -96,7 +111,8 @@ fun ProfileViewContent(
                         border = BorderStroke(2.dp, Color.White),
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
-                            .size(28.dp)
+                            .padding(12.dp)
+                            .size(30.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
@@ -229,125 +245,6 @@ fun ProfileViewContent(
             }
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // 3 Quick utility cards in a row (Matches screenshot 12: Super Likes, My Boosts, Subscriptions)
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            // Super Likes Card
-            QuickUtilityCard(
-                iconText = "⭐",
-                title = "0 Super Likes",
-                actionText = "Get more",
-                modifier = Modifier.weight(1f),
-                onClick = { showFeaturesModal = true }
-            )
-
-            // My Boosts Card
-            QuickUtilityCard(
-                iconText = "⚡",
-                title = "My Boosts",
-                actionText = "Get more",
-                modifier = Modifier.weight(1f),
-                onClick = { showFeaturesModal = true }
-            )
-
-            // Subscriptions Card
-            QuickUtilityCard(
-                iconText = "🔥",
-                title = "Subscriptions",
-                actionText = "₹49/wk",
-                modifier = Modifier.weight(1f),
-                onClick = onOpenPremiumFlow
-            )
-        }
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // Interactive Subscription Carousel Cards (Matches screenshots 12, 13, and 14)
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-        ) {
-            when (subscriptionCardIndex) {
-                0 -> {
-                    // 1. Mallu Cupid Premium (₹49/wk)
-                    SubscriptionBannerCard(
-                        tierName = "MALLU CUPID PREMIUM · ₹49/WK",
-                        flameColor = DashboardTerracotta,
-                        gradientColors = listOf(Color(0xFF38231C), Color(0xFF221612)),
-                        features = listOf("Unlimited Likes", "See Who Likes You", "Unlimited Chat", "Unlimited Rewind"),
-                        onUpgrade = onOpenPremiumFlow
-                    )
-                }
-
-                1 -> {
-                    // 2. Cupid Gold Card (Matches screenshot 13)
-                    SubscriptionBannerCard(
-                        tierName = "CUPID GOLD",
-                        flameColor = TinderGold,
-                        gradientColors = listOf(Color(0xFFF59E0B), Color(0xFFB45309)),
-                        features = listOf("See Who Likes You", "Top Picks daily", "Free Super Likes"),
-                        onUpgrade = onOpenPremiumFlow
-                    )
-                }
-
-                2 -> {
-                    // 3. Cupid Platinum Card (Matches screenshot 14)
-                    SubscriptionBannerCard(
-                        tierName = "CUPID PLATINUM",
-                        flameColor = Color(0xFF60A5FA),
-                        gradientColors = listOf(Color(0xFF0F172A), Color(0xFF1E293B)),
-                        features = listOf("Priority Likes", "Message Before Matching", "See Who Likes You"),
-                        onUpgrade = onOpenPremiumFlow
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Carousel 3-dots indicator (Matches screenshot 12-14)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            for (i in 0..2) {
-                Box(
-                    modifier = Modifier
-                        .padding(horizontal = 4.dp)
-                        .size(if (subscriptionCardIndex == i) 8.dp else 6.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (subscriptionCardIndex == i) TinderTextPrimary
-                            else TinderTextMuted.copy(alpha = 0.5f)
-                        )
-                        .clickable { subscriptionCardIndex = i }
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // "See all Features" link
-        Text(
-            text = "See all Features",
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-            color = TinderTextPrimary,
-            textAlign = TextAlign.Center,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { onOpenPremiumFlow() }
-                .padding(vertical = 4.dp)
-        )
-
         Spacer(modifier = Modifier.height(20.dp))
 
         // System UI States Showcase (Loading, No Internet, Error)
@@ -429,34 +326,6 @@ fun ProfileViewContent(
         Spacer(modifier = Modifier.height(30.dp))
     }
 
-    // Full Features Comparison Modal
-    if (showFeaturesModal) {
-        AlertDialog(
-            onDismissRequest = { showFeaturesModal = false },
-            title = {
-                Text("Subscription Plans", fontWeight = FontWeight.Bold, color = TinderTextPrimary)
-            },
-            text = {
-                Column {
-                    Text("🔥 Cupid Plus: Unlimited likes & rewinds", fontSize = 13.sp, color = TinderTextPrimary)
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text("👑 Cupid Gold: See who likes you + top picks", fontSize = 13.sp, color = TinderTextPrimary)
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text("💎 Cupid Platinum: Priority likes & attach notes", fontSize = 13.sp, color = TinderTextPrimary)
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = { showFeaturesModal = false },
-                    colors = ButtonDefaults.buttonColors(containerColor = TinderCoral)
-                ) {
-                    Text("Got it", color = Color.White)
-                }
-            },
-            containerColor = TinderSurface
-        )
-    }
-
     // Sign Out confirmation dialog (child of the existing root container — no inset change)
     if (showSignOutDialog) {
         AlertDialog(
@@ -508,144 +377,5 @@ fun ProfileViewContent(
             },
             containerColor = DashboardCard
         )
-    }
-}
-
-@Composable
-private fun QuickUtilityCard(
-    iconText: String,
-    title: String,
-    actionText: String,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(14.dp),
-        color = TinderSurface,
-        border = BorderStroke(1.dp, TinderBorder),
-        shadowElevation = 1.dp,
-        modifier = modifier.height(105.dp)
-    ) {
-        Box(modifier = Modifier.fillMaxSize().padding(10.dp)) {
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.SpaceBetween
-            ) {
-                // Top row with emoji and + badge
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Top
-                ) {
-                    Text(text = iconText, fontSize = 22.sp)
-                    Surface(
-                        shape = CircleShape,
-                        color = TinderSurface,
-                        border = BorderStroke(1.dp, TinderBorder),
-                        modifier = Modifier.size(20.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Text(text = "+", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TinderTextPrimary)
-                        }
-                    }
-                }
-
-                // Bottom title and action
-                Column {
-                    Text(
-                        text = title,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TinderTextPrimary
-                    )
-                    if (actionText.isNotBlank()) {
-                        Text(
-                            text = actionText,
-                            fontSize = 11.sp,
-                            color = TinderTextSecondary
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SubscriptionBannerCard(
-    tierName: String,
-    flameColor: Color,
-    gradientColors: List<Color>,
-    features: List<String>,
-    onUpgrade: () -> Unit
-) {
-    Surface(
-        shape = RoundedCornerShape(18.dp),
-        color = Color.Transparent,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(150.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Brush.linearGradient(gradientColors))
-                .padding(18.dp)
-        ) {
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.SpaceBetween
-            ) {
-                // Top Row: Tier Name & Upgrade Button
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(text = "🔥", fontSize = 18.sp)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = tierName,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                    }
-
-                    Surface(
-                        onClick = onUpgrade,
-                        shape = RoundedCornerShape(50),
-                        color = Color.White
-                    ) {
-                        Text(
-                            text = "UPGRADE",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.Black,
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                        )
-                    }
-                }
-
-                // Features
-                Column {
-                    Text(
-                        text = "What's Included:",
-                        fontSize = 11.sp,
-                        color = Color.White.copy(alpha = 0.7f),
-                        fontWeight = FontWeight.Medium
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = features.joinToString("  •  "),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color.White
-                    )
-                }
-            }
-        }
     }
 }

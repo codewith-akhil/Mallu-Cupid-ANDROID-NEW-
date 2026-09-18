@@ -36,12 +36,9 @@ import com.mallucupid.app.ui.theme.*
 fun LikesViewContent(
     userId: String?,
     profiles: List<DatingProfile>,
-    onSelectProfile: (DatingProfile) -> Unit,
-    onUpgradeToPremium: () -> Unit = {}
+    onSelectProfile: (DatingProfile) -> Unit
 ) {
-    var selectedLikesTab by remember { mutableStateOf(0) } // 0: 0 likes, 1: Likes sent, 2: Top Picks
-    var showGoldModal by remember { mutableStateOf(false) }
-    var modalFeatureTitle by remember { mutableStateOf("Mallu Cupid Gold") }
+    var selectedLikesTab by remember { mutableStateOf(0) } // 0: Likes received, 1: Likes sent, 2: Top Picks
 
     // Real DB state — loaded async on first composition / when userId changes.
     var likesReceivedCount by remember { mutableStateOf(0) }
@@ -140,7 +137,7 @@ fun LikesViewContent(
         Box(modifier = Modifier.fillMaxSize()) {
             when (selectedLikesTab) {
                 0 -> {
-                    // 0 Likes Tab (Matches screenshot 16)
+                    // Likes Tab — FREE (no paywall; payments removed entirely)
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
@@ -169,7 +166,10 @@ fun LikesViewContent(
                         Spacer(modifier = Modifier.height(24.dp))
 
                         Text(
-                            text = "See people who liked you with Mallu Cupid Gold",
+                            text = if (likesReceivedCount > 0)
+                                "$likesReceivedCount ${if (likesReceivedCount == 1) "person likes" else "people like"} you!"
+                            else
+                                "No likes yet — keep swiping!",
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Bold,
                             color = TinderTextPrimary,
@@ -179,49 +179,18 @@ fun LikesViewContent(
                         Spacer(modifier = Modifier.height(8.dp))
 
                         Text(
-                            text = "Match instantly with singles nearby who have already swiped right on your profile.",
+                            text = "When someone likes you back, it's an instant match and you can start chatting right away.",
                             fontSize = 14.sp,
                             color = TinderTextSecondary,
                             textAlign = TextAlign.Center,
                             lineHeight = 20.sp
                         )
-
-                        Spacer(modifier = Modifier.height(28.dp))
-
-                        Button(
-                            onClick = onUpgradeToPremium,
-                            shape = RoundedCornerShape(50),
-                            colors = ButtonDefaults.buttonColors(containerColor = DashboardTerracotta),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(50.dp)
-                        ) {
-                            Text(
-                                text = "See who likes you · ₹49/week",
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                        }
                     }
                 }
 
                 1 -> {
-                    // Likes Sent Tab (Matches screenshot 17)
+                    // Likes Sent Tab — free, no upgrade button
                     Column(modifier = Modifier.fillMaxSize()) {
-                        // Subtitle banner
-                        Surface(
-                            color = TinderSurface,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = "With Platinum, we'll prioritise your likes.",
-                                fontSize = 13.sp,
-                                color = TinderTextSecondary,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
-                            )
-                        }
-
                         // Grid of profiles (real DB-loaded list, with a centered
                         // loading spinner while the fetch is in flight).
                         if (likesLoading && likesSentProfiles.isEmpty()) {
@@ -233,6 +202,18 @@ fun LikesViewContent(
                                     color = DashboardTerracotta,
                                     strokeWidth = 2.dp,
                                     modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        } else if (likesSentProfiles.isEmpty()) {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "You haven't liked anyone yet.",
+                                    fontSize = 14.sp,
+                                    color = TinderTextSecondary,
+                                    textAlign = TextAlign.Center
                                 )
                             }
                         } else {
@@ -254,156 +235,46 @@ fun LikesViewContent(
                             }
                         }
                     }
-
-                    // Floating Upgrade button at bottom
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 16.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                modalFeatureTitle = "Mallu Cupid Platinum"
-                                showGoldModal = true
-                            },
-                            shape = RoundedCornerShape(50),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.Black),
-                            modifier = Modifier.height(48.dp)
-                        ) {
-                            Text(
-                                text = "Upgrade Likes",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                                modifier = Modifier.padding(horizontal = 16.dp)
-                            )
-                        }
-                    }
                 }
 
                 2 -> {
-                    // Top Picks Tab (Matches screenshot 18)
+                    // Top Picks Tab — everything unlocked (payments removed)
                     Column(modifier = Modifier.fillMaxSize()) {
-                        // Subtitle banner
-                        Surface(
-                            color = TinderSurface,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = "Upgrade to Mallu Cupid Gold for more Top Picks!",
-                                fontSize = 13.sp,
-                                color = TinderTextSecondary,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
-                            )
-                        }
-
-                        // Grid with some unlocked and some blurred/locked cards (Matches screenshot 18)
-                        LazyVerticalGrid(
-                            columns = GridCells.Fixed(2),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(12.dp)
-                        ) {
-                            items(profiles) { profile ->
-                                val isLocked = profile.id.toIntOrNull() ?: 0 > 2
-                                ProfileGridCard(
-                                    profile = profile,
-                                    timeBadge = "12h left",
-                                    isLocked = isLocked,
-                                    onClick = {
-                                        if (isLocked) {
-                                            modalFeatureTitle = "Mallu Cupid Gold Top Picks"
-                                            showGoldModal = true
-                                        } else {
-                                            onSelectProfile(profile)
-                                        }
-                                    }
+                        if (profiles.isEmpty()) {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "Top Picks will appear as new singles join nearby.",
+                                    fontSize = 14.sp,
+                                    color = TinderTextSecondary,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(horizontal = 32.dp)
                                 )
                             }
-                        }
-                    }
-
-                    // Floating Unlock All button at bottom
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 16.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                modalFeatureTitle = "Mallu Cupid Gold Top Picks"
-                                showGoldModal = true
-                            },
-                            shape = RoundedCornerShape(50),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.Black),
-                            modifier = Modifier.height(48.dp)
-                        ) {
-                            Text(
-                                text = "Unlock all Top Picks",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                                modifier = Modifier.padding(horizontal = 16.dp)
-                            )
+                        } else {
+                            LazyVerticalGrid(
+                                columns = GridCells.Fixed(2),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(12.dp)
+                            ) {
+                                items(profiles) { profile ->
+                                    ProfileGridCard(
+                                        profile = profile,
+                                        timeBadge = "12h left",
+                                        onClick = { onSelectProfile(profile) }
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
         }
-    }
-
-    // Upgrade Modal Dialog
-    if (showGoldModal) {
-        AlertDialog(
-            onDismissRequest = { showGoldModal = false },
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = "👑", fontSize = 24.sp)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = modalFeatureTitle,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TinderTextPrimary
-                    )
-                }
-            },
-            text = {
-                Column {
-                    Text(
-                        text = "Upgrade your experience with exclusive features:",
-                        fontSize = 13.sp,
-                        color = TinderTextSecondary
-                    )
-                    Spacer(modifier = Modifier.height(14.dp))
-                    BenefitBullet("✓ See Who Likes You before swiping")
-                    BenefitBullet("✓ Daily curated Top Picks near you")
-                    BenefitBullet("✓ Priority Likes seen faster by singles")
-                    BenefitBullet("✓ Unlimited Rewinds and zero ads")
-                    BenefitBullet("✓ Free Super Likes every week")
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showGoldModal = false
-                        onUpgradeToPremium()
-                    },
-                    shape = RoundedCornerShape(50),
-                    colors = ButtonDefaults.buttonColors(containerColor = TinderGold)
-                ) {
-                    Text("Continue", color = Color.White, fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showGoldModal = false }) {
-                    Text("Maybe later", color = TinderTextSecondary)
-                }
-            },
-            containerColor = TinderSurface
-        )
     }
 }
 
@@ -411,7 +282,6 @@ fun LikesViewContent(
 private fun ProfileGridCard(
     profile: DatingProfile,
     timeBadge: String,
-    isLocked: Boolean = false,
     onClick: () -> Unit
 ) {
     Surface(
@@ -428,9 +298,7 @@ private fun ProfileGridCard(
             AsyncImage(
                 model = profile.photos.firstOrNull() ?: "",
                 contentDescription = profile.name,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .then(if (isLocked) Modifier.blur(14.dp) else Modifier),
+                modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop
             )
 
@@ -463,42 +331,22 @@ private fun ProfileGridCard(
                 )
             }
 
-            if (isLocked) {
-                // Gold lock in center
-                Surface(
-                    shape = CircleShape,
-                    color = TinderGold,
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .size(44.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.Lock,
-                            contentDescription = "Locked",
-                            tint = Color.White,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-                }
-            } else {
-                // Star / Super button in bottom right
-                Surface(
-                    shape = CircleShape,
-                    color = TinderBlue,
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(10.dp)
-                        .size(34.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.Star,
-                            contentDescription = "Star",
-                            tint = Color.White,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
+            // Star / Super button in bottom right
+            Surface(
+                shape = CircleShape,
+                color = TinderBlue,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(10.dp)
+                    .size(34.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Default.Star,
+                        contentDescription = "Star",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
                 }
             }
 
@@ -519,13 +367,3 @@ private fun ProfileGridCard(
     }
 }
 
-@Composable
-private fun BenefitBullet(text: String) {
-    Text(
-        text = text,
-        fontSize = 13.sp,
-        fontWeight = FontWeight.Medium,
-        color = TinderTextPrimary,
-        modifier = Modifier.padding(vertical = 3.dp)
-    )
-}

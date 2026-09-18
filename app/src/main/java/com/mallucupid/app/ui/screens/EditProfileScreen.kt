@@ -7,7 +7,10 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import android.app.Activity
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
@@ -17,6 +20,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -55,7 +59,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.mallucupid.app.data.DatingProfile
 import com.mallucupid.app.data.OnboardingDraft
-import com.mallucupid.app.data.PromptItem
+import com.mallucupid.app.location.GpsCheck
 import com.mallucupid.app.location.LocationHelper
 import com.mallucupid.app.data.remote.SupabaseRepository
 import com.mallucupid.app.ui.theme.*
@@ -97,6 +101,35 @@ fun EditProfileScreen(
             dbSmokingOptions = SupabaseRepository.getProfileOptions("smoking").ifEmpty { dbSmokingOptions }
         }
     }
+
+    // Tinder-level option sets: DB list FIRST (keeps admin ordering), then any
+    // missing Tinder staples appended, de-duplicated. Guarantees a rich picker
+    // even if the DB table is thin.
+    val genderOptionsAll = (dbGenderOptions + listOf(
+        "Man", "Woman", "Transman", "Transwoman", "Non-binary"
+    )).distinct()
+    val lookingForOptionsAll = (dbLookingForOptions + listOf(
+        "Serious relationship", "Long-term partner", "Long-term, open to short",
+        "Short-term fun", "Casual relationship", "Dating", "New friends",
+        "Friends with benefits", "Marriage-minded", "Still figuring it out"
+    )).distinct()
+    val maritalStatusOptionsAll = (dbMaritalStatusOptions + listOf(
+        "Single", "Never Married", "In a Relationship", "Divorced", "Separated", "Widowed"
+    )).distinct()
+    val familyPlansOptionsAll = (dbFamilyPlansOptions + listOf(
+        "Want children", "Don't want children", "Have children & want more",
+        "Have children & don't want more", "Not sure yet"
+    )).distinct()
+    val petsOptionsAll = (dbPetsOptions + listOf(
+        "Dog lover", "Cat lover", "Have pets", "Don't have, but love pets",
+        "Pet-free", "Allergic to pets"
+    )).distinct()
+    val drinkingOptionsAll = (dbDrinkingOptions + listOf(
+        "Not for me", "Sober", "Socially", "On special occasions", "Regularly"
+    )).distinct()
+    val smokingOptionsAll = (dbSmokingOptions + listOf(
+        "Non-smoker", "Social smoker", "Smoker", "Trying to quit"
+    )).distinct()
     var selectedTab by remember { mutableStateOf("Edit") } // "Edit" or "Preview"
 
     // Active target slot for single-photo replacement (null means append)
@@ -115,14 +148,12 @@ fun EditProfileScreen(
     var helpDialogTopic by remember { mutableStateOf("Safety & Dating Tips") }
     var showLegalDialog by remember { mutableStateOf(false) }
     var legalDialogTopic by remember { mutableStateOf("Terms of Service") }
-    var showAddPromptDialog by remember { mutableStateOf(false) }
-    var newPromptQuestion by remember { mutableStateOf("A life goal of mine is:") }
-    var newPromptAnswer by remember { mutableStateOf("") }
     var showTipsDialog by remember { mutableStateOf(false) }
 
     // Location fetching feedback
     var isFetchingLocation by remember { mutableStateOf(false) }
     var locationFeedbackMessage by remember { mutableStateOf<String?>(null) }
+    var locationFailed by remember { mutableStateOf(false) }
 
     // Real Media Pickers from Device
     val singlePhotoPickerLauncher = rememberLauncherForActivityResult(
@@ -175,8 +206,11 @@ fun EditProfileScreen(
     }
 
     // Real Location Permission & Fetcher (FusedLocationProviderClient via LocationHelper)
-    fun executeLocationFetch() {
+    // Full flow: permission -> SYSTEM "Turn on GPS?" dialog -> fetch. On failure we
+    // ALWAYS show a message and NEVER wipe a city the user already saved.
+    fun performLocationFetch() {
         isFetchingLocation = true
+        locationFailed = false
         locationFeedbackMessage = "Locating via GPS..."
         coroutineScope.launch(Dispatchers.IO) {
             val loc = LocationHelper.getCurrentLocation(context)
@@ -185,12 +219,49 @@ fun EditProfileScreen(
                     draft = draft.copy(city = loc.fullLocation, latitude = loc.latitude, longitude = loc.longitude)
                     locationFeedbackMessage = "Location updated: ${loc.fullLocation}"
                 } else {
-                    // FusedLocationProviderClient could not obtain a fresh fix
-                    // (emulator, indoor, or permission revoked at runtime).
-                    draft = draft.copy(city = "", latitude = null, longitude = null)
-                    locationFeedbackMessage = "Location detection failed. Please enter your city manually."
+                    locationFailed = true
+                    locationFeedbackMessage = "Couldn't get a GPS fix. Turn on location and retry, or type your city manually."
                 }
                 isFetchingLocation = false
+            }
+        }
+    }
+
+    val gpsResolutionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            performLocationFetch()
+        } else {
+            isFetchingLocation = false
+            locationFailed = true
+            locationFeedbackMessage = "GPS stays off. Turn on location to auto-detect, or type your city manually."
+        }
+    }
+
+    fun startLocationFlow() {
+        isFetchingLocation = true
+        locationFailed = false
+        locationFeedbackMessage = "Checking GPS..."
+        coroutineScope.launch {
+            when (val gps = LocationHelper.checkGpsSettings(context)) {
+                is GpsCheck.Enabled -> performLocationFetch()
+                is GpsCheck.Resolvable -> {
+                    try {
+                        gpsResolutionLauncher.launch(
+                            IntentSenderRequest.Builder(gps.pendingIntent.intentSender).build()
+                        )
+                    } catch (e: Exception) {
+                        isFetchingLocation = false
+                        locationFailed = true
+                        locationFeedbackMessage = "Couldn't open the GPS prompt. Enable location in Settings, then retry."
+                    }
+                }
+                GpsCheck.Unresolvable -> {
+                    isFetchingLocation = false
+                    locationFailed = true
+                    locationFeedbackMessage = "GPS is turned off on this phone. Enable location in Settings and try again."
+                }
             }
         }
     }
@@ -201,10 +272,11 @@ fun EditProfileScreen(
         val fineGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true
         val coarseGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         if (fineGranted || coarseGranted) {
-            executeLocationFetch()
+            startLocationFlow()
         } else {
             isFetchingLocation = false
-            locationFeedbackMessage = "Location permission needed. You can enter manually."
+            locationFailed = true
+            locationFeedbackMessage = "Location permission needed. You can enter your city manually."
             Toast.makeText(context, "Location permission denied. Enter city manually.", Toast.LENGTH_SHORT).show()
         }
     }
@@ -711,7 +783,7 @@ fun EditProfileScreen(
                             value = draft.name,
                             onValueChange = { if (it.length <= 50) draft = draft.copy(name = it) },
                             modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text("Enter your full or preferred name", color = DashboardNavMuted) },
+                            placeholder = { Text("Enter your full or preferred name", color = Color(0xFF9E9E9E)) },
                             leadingIcon = {
                                 Icon(
                                     imageVector = Icons.Default.Person,
@@ -770,7 +842,7 @@ fun EditProfileScreen(
                             placeholder = {
                                 Text(
                                     "Tell singles nearby about your interests, vibe, favorite coffee spot or weekend plans...",
-                                    color = DashboardNavMuted,
+                                    color = Color(0xFF9E9E9E),
                                     fontSize = 13.sp
                                 )
                             },
@@ -829,17 +901,17 @@ fun EditProfileScreen(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // ==========================================
-                // 4. GENDER
+                // 4. GENDER (DROPDOWN MODAL SELECTION)
                 // ==========================================
                 DashboardSectionCard(
                     title = "Gender",
                     subtitle = "Select your identified gender",
                     icon = Icons.Default.Wc
                 ) {
-                    val genderOptions = dbGenderOptions
-                    SelectableChipRow(
-                        options = genderOptions,
-                        selectedOption = draft.gender,
+                    ModalDropdownField(
+                        label = "Gender",
+                        options = genderOptionsAll,
+                        selected = draft.gender,
                         onSelect = { draft = draft.copy(gender = it) }
                     )
                 }
@@ -847,75 +919,20 @@ fun EditProfileScreen(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // ==========================================
-                // 5. LOOKING FOR
-                // serious relationship, casual relationship, dating, NEW FRIENDS,
-                // FRIENDS WITH BENEFITS, COUPLE FANTASIES, NOT SURE YET
+                // 5. LOOKING FOR (DROPDOWN MODAL SELECTION)
+                // Tinder-level options incl. long-term, short-term, friends, etc.
                 // ==========================================
                 DashboardSectionCard(
                     title = "Looking For",
                     subtitle = "Be open about what connection you want right now",
                     icon = Icons.Default.Favorite
                 ) {
-                    val lookingForOptions = listOf(
-                        "Serious relationship",
-                        "Casual relationship",
-                        "Dating",
-                        "New friends",
-                        "Friends with benefits",
-                        "Couple fantasies",
-                        "Not sure yet"
+                    ModalDropdownField(
+                        label = "Looking for",
+                        options = lookingForOptionsAll,
+                        selected = draft.lookingFor,
+                        onSelect = { draft = draft.copy(lookingFor = it) }
                     )
-
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        lookingForOptions.chunked(2).forEach { rowOptions ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                rowOptions.forEach { opt ->
-                                    val isSelected = draft.lookingFor.equals(opt, ignoreCase = true)
-                                    Surface(
-                                        onClick = { draft = draft.copy(lookingFor = opt) },
-                                        shape = RoundedCornerShape(12.dp),
-                                        color = if (isSelected) DashboardTerracotta else Color(0xFF261E1A),
-                                        border = BorderStroke(
-                                            1.dp,
-                                            if (isSelected) DashboardPeach else Color(0xFF42342D)
-                                        ),
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.Center
-                                        ) {
-                                            if (isSelected) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Check,
-                                                    contentDescription = null,
-                                                    tint = Color.White,
-                                                    modifier = Modifier.size(14.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(6.dp))
-                                            }
-                                            Text(
-                                                text = opt,
-                                                fontSize = 12.sp,
-                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                                color = if (isSelected) Color.White else DashboardMutedBeige,
-                                                textAlign = TextAlign.Center,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        }
-                                    }
-                                }
-                                if (rowOptions.size == 1) {
-                                    Spacer(modifier = Modifier.weight(1f))
-                                }
-                            }
-                        }
-                    }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -933,7 +950,7 @@ fun EditProfileScreen(
                             value = draft.city,
                             onValueChange = { draft = draft.copy(city = it) },
                             modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text("e.g. London, United Kingdom", color = DashboardNavMuted) },
+                            placeholder = { Text("e.g. London, United Kingdom", color = Color(0xFF9E9E9E)) },
                             leadingIcon = {
                                 Icon(
                                     imageVector = Icons.Default.Place,
@@ -948,15 +965,19 @@ fun EditProfileScreen(
 
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        // Location Fetch Button
+                        // Location Fetch Button — full flow incl. system GPS dialog
                         OutlinedButton(
                             onClick = {
-                                locationPermissionLauncher.launch(
-                                    arrayOf(
-                                        Manifest.permission.ACCESS_FINE_LOCATION,
-                                        Manifest.permission.ACCESS_COARSE_LOCATION
+                                if (LocationHelper.hasLocationPermission(context)) {
+                                    startLocationFlow()
+                                } else {
+                                    locationPermissionLauncher.launch(
+                                        arrayOf(
+                                            Manifest.permission.ACCESS_FINE_LOCATION,
+                                            Manifest.permission.ACCESS_COARSE_LOCATION
+                                        )
                                     )
-                                )
+                                }
                             },
                             border = BorderStroke(1.2.dp, DashboardPeach),
                             shape = RoundedCornerShape(10.dp),
@@ -992,7 +1013,8 @@ fun EditProfileScreen(
                             Text(
                                 text = locationFeedbackMessage!!,
                                 fontSize = 11.sp,
-                                color = DashboardPeach,
+                                color = if (locationFailed) NopeCoral else DashboardPeach,
+                                fontWeight = if (locationFailed) FontWeight.SemiBold else FontWeight.Normal,
                                 modifier = Modifier.padding(start = 4.dp)
                             )
                         }
@@ -1061,50 +1083,42 @@ fun EditProfileScreen(
                     icon = Icons.Default.Diversity3
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        // Marital Status
-                        OptionSelectorGroup(
-                            title = "Marital Status",
-                            options = dbMaritalStatusOptions,
+                        // Marital Status (dropdown modal)
+                        ModalDropdownField(
+                            label = "Marital Status",
+                            options = maritalStatusOptionsAll,
                             selected = draft.maritalStatus,
                             onSelect = { draft = draft.copy(maritalStatus = it) }
                         )
 
-                        HorizontalDivider(color = Color(0xFF382D27))
-
-                        // Family Plans
-                        OptionSelectorGroup(
-                            title = "Family Plans",
-                            options = dbFamilyPlansOptions,
+                        // Family Plans (dropdown modal)
+                        ModalDropdownField(
+                            label = "Family Plans",
+                            options = familyPlansOptionsAll,
                             selected = draft.familyPlans,
                             onSelect = { draft = draft.copy(familyPlans = it) }
                         )
 
-                        HorizontalDivider(color = Color(0xFF382D27))
-
-                        // Pets
-                        OptionSelectorGroup(
-                            title = "Pets",
-                            options = dbPetsOptions,
+                        // Pets (dropdown modal)
+                        ModalDropdownField(
+                            label = "Pets",
+                            options = petsOptionsAll,
                             selected = draft.pets,
                             onSelect = { draft = draft.copy(pets = it) }
                         )
 
-                        HorizontalDivider(color = Color(0xFF382D27))
-
-                        // Drinking
-                        OptionSelectorGroup(
-                            title = "Drinking Habits",
-                            options = dbDrinkingOptions,
+                        // Drinking (dropdown modal)
+                        ModalDropdownField(
+                            label = "Drinking Habits",
+                            options = drinkingOptionsAll,
                             selected = draft.drinking,
                             onSelect = { draft = draft.copy(drinking = it) }
                         )
 
-                        HorizontalDivider(color = Color(0xFF382D27))
-
-                        // Smoking
-                        OptionSelectorGroup(
-                            title = "Smoking Habits",
-                            options = dbSmokingOptions,
+                        // Smoking (dropdown modal)
+                        ModalDropdownField(
+                            label = "Smoking Habits",
+                            options = smokingOptionsAll,
                             selected = draft.smoking,
                             onSelect = { draft = draft.copy(smoking = it) }
                         )
@@ -1137,7 +1151,7 @@ fun EditProfileScreen(
                                 if (clean.length <= 30) draft = draft.copy(username = clean)
                             },
                             modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text("username_here", color = DashboardNavMuted) },
+                            placeholder = { Text("username_here", color = Color(0xFF9E9E9E)) },
                             prefix = {
                                 Text(
                                     text = "@",
@@ -1661,7 +1675,7 @@ private fun DarkLabeledTextField(
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,
-            placeholder = { Text(placeholder, color = DashboardNavMuted, fontSize = 13.sp) },
+            placeholder = { Text(placeholder, color = Color(0xFF9E9E9E), fontSize = 13.sp) },
             leadingIcon = {
                 Icon(
                     imageVector = icon,
@@ -1678,101 +1692,117 @@ private fun DarkLabeledTextField(
     }
 }
 
+/**
+ * Dropdown MODAL selection field (user requirement: every selection in Edit
+ * Profile is a modal bottom-sheet picker). Field shows the current value on a
+ * REAL WHITE background with BLACK text; the modal lists options in white with
+ * black text and a terracotta check on the selected row.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SelectableChipRow(
-    options: List<String>,
-    selectedOption: String,
-    onSelect: (String) -> Unit
-) {
-    LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        items(options) { opt ->
-            val isSelected = selectedOption.equals(opt, ignoreCase = true)
-            Surface(
-                onClick = { onSelect(opt) },
-                shape = RoundedCornerShape(50),
-                color = if (isSelected) DashboardTerracotta else Color(0xFF261E1A),
-                border = BorderStroke(
-                    1.dp,
-                    if (isSelected) DashboardPeach else Color(0xFF42342D)
-                )
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (isSelected) {
-                        Icon(
-                            imageVector = Icons.Default.Check,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                    }
-                    Text(
-                        text = opt,
-                        fontSize = 12.sp,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                        color = if (isSelected) Color.White else DashboardMutedBeige
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun OptionSelectorGroup(
-    title: String,
+private fun ModalDropdownField(
+    label: String,
     options: List<String>,
     selected: String,
     onSelect: (String) -> Unit
 ) {
+    var expanded by remember { mutableStateOf(false) }
+
     Column {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+        Text(
+            text = label,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = DashboardMutedBeige
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Surface(
+            onClick = { expanded = true },
+            shape = RoundedCornerShape(12.dp),
+            color = Color.White,
+            border = BorderStroke(
+                1.dp,
+                if (selected.isNotBlank()) DashboardTerracotta else Color(0xFFDDDDDD)
+            ),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp)
         ) {
-            Text(
-                text = title,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold,
-                color = DashboardCream
-            )
-            Text(
-                text = selected.ifBlank { "Not set" },
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = DashboardPeach
-            )
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 15.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = selected.ifBlank { "Select $label" },
+                    color = if (selected.isNotBlank()) Color.Black else Color(0xFF6E6E6E),
+                    fontSize = 14.sp,
+                    fontWeight = if (selected.isNotBlank()) FontWeight.SemiBold else FontWeight.Normal,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowDown,
+                    contentDescription = "Open $label picker",
+                    tint = Color.Black,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
         }
-        Spacer(modifier = Modifier.height(8.dp))
-        LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth()
+    }
+
+    if (expanded) {
+        ModalBottomSheet(
+            onDismissRequest = { expanded = false },
+            containerColor = Color.White,
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ) {
-            items(options) { opt ->
-                val isSelected = selected.equals(opt, ignoreCase = true)
-                Surface(
-                    onClick = { onSelect(opt) },
-                    shape = RoundedCornerShape(10.dp),
-                    color = if (isSelected) DashboardTerracotta else Color(0xFF261E1A),
-                    border = BorderStroke(
-                        1.dp,
-                        if (isSelected) DashboardPeach else Color(0xFF42342D)
-                    )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 28.dp)
+            ) {
+                Text(
+                    text = label,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.Black,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
+                )
+                HorizontalDivider(color = Color(0xFFEEEEEE))
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 430.dp)
                 ) {
-                    Text(
-                        text = opt,
-                        fontSize = 12.sp,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                        color = if (isSelected) Color.White else DashboardMutedBeige,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
-                    )
+                    items(options.size) { index ->
+                        val opt = options[index]
+                        val isSelected = opt.equals(selected, ignoreCase = true)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onSelect(opt)
+                                    expanded = false
+                                }
+                                .padding(horizontal = 20.dp, vertical = 14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = opt,
+                                fontSize = 15.sp,
+                                color = if (isSelected) DashboardTerracotta else Color.Black,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            )
+                            if (isSelected) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = "Selected",
+                                    tint = DashboardTerracotta,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1833,10 +1863,10 @@ private fun GroupedActionRow(
 @Composable
 private fun darkFieldColors() = OutlinedTextFieldDefaults.colors(
     focusedBorderColor = DashboardTerracotta,
-    unfocusedBorderColor = Color(0xFF4A3A33),
+    unfocusedBorderColor = Color(0xFFDDDDDD),
     focusedTextColor = Color.Black,
     unfocusedTextColor = Color.Black,
-    focusedContainerColor = Color.White.copy(alpha = 0.95f),
-    unfocusedContainerColor = Color.White.copy(alpha = 0.95f),
-    cursorColor = DashboardPeach
+    focusedContainerColor = Color.White,
+    unfocusedContainerColor = Color.White,
+    cursorColor = DashboardTerracotta
 )

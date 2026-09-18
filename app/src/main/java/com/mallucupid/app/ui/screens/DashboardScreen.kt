@@ -124,7 +124,6 @@ fun DashboardScreen(
     var showEditProfileScreen by remember { mutableStateOf(false) }
     var showAccountSettingsScreen by remember { mutableStateOf(false) }
     var showFaceVerificationScreen by remember { mutableStateOf(false) }
-    var showPremiumSubscriptionFlow by remember { mutableStateOf(false) }
     var activeSystemScreen by remember { mutableStateOf<String?>(null) } // "LOADING", "NO_INTERNET", "ERROR"
     var expandedProfile by remember { mutableStateOf<DatingProfile?>(null) }
     var firstImpressionProfile by remember { mutableStateOf<DatingProfile?>(null) }
@@ -285,17 +284,6 @@ fun DashboardScreen(
                 }
             },
             onBack = { showFaceVerificationScreen = false }
-        )
-        return
-    }
-
-    if (showPremiumSubscriptionFlow) {
-        PremiumSubscriptionFlow(
-            onSuccess = {
-                showPremiumSubscriptionFlow = false
-                actionToast = "Mallu Cupid Premium activated! Enjoy Unlimited Likes & Chats"
-            },
-            onBack = { showPremiumSubscriptionFlow = false }
         )
         return
     }
@@ -548,9 +536,6 @@ fun DashboardScreen(
                     profiles = profiles,
                     onSelectProfile = { p ->
                         expandedProfile = p
-                    },
-                    onUpgradeToPremium = {
-                        showPremiumSubscriptionFlow = true
                     }
                 )
             }
@@ -571,7 +556,6 @@ fun DashboardScreen(
                     onOpenSettings = { showAccountSettingsScreen = true },
                     onSignOut = onSignOut,
                     onOpenFaceVerification = { showFaceVerificationScreen = true },
-                    onOpenPremiumFlow = { showPremiumSubscriptionFlow = true },
                     onShowSystemScreen = { screenType -> activeSystemScreen = screenType }
                 )
             }

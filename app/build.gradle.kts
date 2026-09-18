@@ -17,8 +17,8 @@ android {
     applicationId = "com.mallucupid.connect"
     minSdk = 26
     targetSdk = 36
-    versionCode = 1006
-    versionName = "1.0.0"
+    versionCode = 1007
+    versionName = "1.0.7"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -113,7 +113,6 @@ implementation(libs.firebase.messaging)
   // implementation(libs.googleid)
   implementation(libs.firebase.appcheck.recaptcha)
 implementation(libs.mlkit.face.detection)
-implementation(libs.androidx.play.billing)
   debugImplementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)

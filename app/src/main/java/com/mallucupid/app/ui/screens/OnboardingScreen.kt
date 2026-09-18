@@ -2,7 +2,10 @@ package com.mallucupid.app.ui.screens
 
 import android.Manifest
 import android.net.Uri
+import android.app.Activity
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
@@ -58,30 +61,37 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.mallucupid.app.data.OnboardingDraft
-import com.mallucupid.app.data.PromptItem
 import com.mallucupid.app.data.SampleProfiles
 import com.mallucupid.app.data.remote.SupabaseRepository
+import com.mallucupid.app.location.GpsCheck
 import com.mallucupid.app.location.LocationHelper
 import com.mallucupid.app.ui.theme.*
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
-private const val TOTAL_STEPS = 9
+private const val TOTAL_STEPS = 8
 
+// Tinder-level interest catalogue (48 options) — was 9 before.
 private val interestOptions = listOf(
     "Foodie", "Travel", "Movies", "Music", "Fitness", "Reading",
-    "Cooking", "Beach days", "Family time"
+    "Cooking", "Beach days", "Family time", "Gym", "Yoga", "Running",
+    "Cycling", "Hiking", "Camping", "Cricket", "Football", "Badminton",
+    "Swimming", "Dancing", "Karaoke", "Concerts", "Photography", "Art",
+    "Museums", "Gaming", "Board games", "Anime", "Netflix binge", "Theatre",
+    "Coffee", "Tea lover", "Street food", "Baking", "Gardening", "Pets",
+    "Dogs", "Cats", "Road trips", "Backpacking", "Shopping", "Fashion",
+    "Startups", "Technology", "Volunteering", "Spirituality", "Astrology", "Writing"
 )
 
+// Tinder-level relationship goals (7 options) — was 4 before.
 private val goalOptions = listOf(
-    "Something serious", "Marriage-minded", "Open to seeing where it goes", "New connections"
-)
-
-private val promptOptions = listOf(
-    "A perfect Sunday looks like...",
-    "The quickest way to my heart is...",
-    "I will never say no to...",
-    "A non-negotiable for me is..."
+    "Long-term partner",
+    "Long-term, open to short",
+    "Short-term fun",
+    "Marriage-minded",
+    "Something serious",
+    "Open to seeing where it goes",
+    "New friends"
 )
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -132,9 +142,6 @@ fun OnboardingScreen(
             } else ""
             7 -> if (draft.goal.isBlank()) {
                 "Choose what you are looking for."
-            } else ""
-            8 -> if (draft.prompts.any { it.answer.trim().length < 3 }) {
-                "Answer both prompts so people can start a conversation."
             } else ""
             else -> ""
         }
@@ -303,7 +310,7 @@ fun OnboardingScreen(
                     }
                 }
 
-                if (step == 9) {
+                if (step == TOTAL_STEPS) {
                     Spacer(modifier = Modifier.height(8.dp))
                     TextButton(
                         onClick = { onComplete(draft) },
@@ -382,24 +389,7 @@ private fun OnboardingStepBody(
             selectedGoal = draft.goal,
             onGoalChange = { onDraftChange(draft.copy(goal = it)) }
         )
-        8 -> Step8Prompts(
-            prompts = draft.prompts,
-            onPromptQuestionChange = { index, question ->
-                val updated = draft.prompts.toMutableList()
-                if (index < updated.size) {
-                    updated[index] = updated[index].copy(question = question)
-                    onDraftChange(draft.copy(prompts = updated))
-                }
-            },
-            onPromptAnswerChange = { index, answer ->
-                val updated = draft.prompts.toMutableList()
-                if (index < updated.size) {
-                    updated[index] = updated[index].copy(answer = answer)
-                    onDraftChange(draft.copy(prompts = updated))
-                }
-            }
-        )
-        9 -> Step9Preferences(
+        8 -> Step9Preferences(
             ageMin = draft.ageMin,
             ageMax = draft.ageMax,
             onAgeChange = { min, max ->
@@ -635,15 +625,15 @@ private fun Step1Gender(
         )
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Identity Dropdown Selector
+        // Identity Dropdown Selector — REAL WHITE background + BLACK text (user requirement)
         Box(modifier = Modifier.fillMaxWidth()) {
             Surface(
                 onClick = { genderDropdownExpanded = true },
                 shape = RoundedCornerShape(16.dp),
-                color = if (gender.isNotBlank()) AccentPink.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.95f),
+                color = Color.White,
                 border = BorderStroke(
                     1.5.dp,
-                    if (gender.isNotBlank()) AccentPink else Color.White.copy(alpha = 0.2f)
+                    if (gender.isNotBlank()) AccentPink else Color(0xFFDDDDDD)
                 ),
                 modifier = Modifier.fillMaxWidth().height(58.dp)
             ) {
@@ -656,14 +646,14 @@ private fun Step1Gender(
                 ) {
                     Text(
                         text = if (gender.isNotBlank()) gender else "Select your identity",
-                        color = if (gender.isNotBlank()) Color.White else Color.White.copy(alpha = 0.6f),
+                        color = if (gender.isNotBlank()) Color.Black else Color(0xFF6E6E6E),
                         fontSize = 16.sp,
                         fontWeight = if (gender.isNotBlank()) FontWeight.SemiBold else FontWeight.Normal
                     )
                     Icon(
                         imageVector = Icons.Default.KeyboardArrowDown,
                         contentDescription = "Select Identity",
-                        tint = if (gender.isNotBlank()) SoftPink else Color.White.copy(alpha = 0.7f)
+                        tint = Color.Black
                     )
                 }
             }
@@ -673,7 +663,7 @@ private fun Step1Gender(
                 onDismissRequest = { genderDropdownExpanded = false },
                 modifier = Modifier
                     .fillMaxWidth(0.88f)
-                    .background(DarkMaroon)
+                    .background(Color.White)
             ) {
                 identityOptions.forEach { option ->
                     val isSelected = gender == option
@@ -686,8 +676,8 @@ private fun Step1Gender(
                             ) {
                                 Text(
                                     text = option,
-                                    color = if (isSelected) SoftPink else Color.White,
-                                    fontSize = 13.sp,
+                                    color = if (isSelected) AccentPink else Color.Black,
+                                    fontSize = 14.sp,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                                 )
                                 if (isSelected) {
@@ -719,15 +709,15 @@ private fun Step1Gender(
         )
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Who to Meet Dropdown Selector
+        // Who to Meet Dropdown Selector — REAL WHITE background + BLACK text (user requirement)
         Box(modifier = Modifier.fillMaxWidth()) {
             Surface(
                 onClick = { meetDropdownExpanded = true },
                 shape = RoundedCornerShape(16.dp),
-                color = if (lookingFor.isNotBlank()) AccentPink.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.95f),
+                color = Color.White,
                 border = BorderStroke(
                     1.5.dp,
-                    if (lookingFor.isNotBlank()) AccentPink else Color.White.copy(alpha = 0.2f)
+                    if (lookingFor.isNotBlank()) AccentPink else Color(0xFFDDDDDD)
                 ),
                 modifier = Modifier.fillMaxWidth().height(58.dp)
             ) {
@@ -740,14 +730,14 @@ private fun Step1Gender(
                 ) {
                     Text(
                         text = if (lookingFor.isNotBlank()) lookingFor else "Select who you want to meet",
-                        color = if (lookingFor.isNotBlank()) Color.White else Color.White.copy(alpha = 0.6f),
+                        color = if (lookingFor.isNotBlank()) Color.Black else Color(0xFF6E6E6E),
                         fontSize = 16.sp,
                         fontWeight = if (lookingFor.isNotBlank()) FontWeight.SemiBold else FontWeight.Normal
                     )
                     Icon(
                         imageVector = Icons.Default.KeyboardArrowDown,
                         contentDescription = "Select Who to Meet",
-                        tint = if (lookingFor.isNotBlank()) SoftPink else Color.White.copy(alpha = 0.7f)
+                        tint = Color.Black
                     )
                 }
             }
@@ -757,7 +747,7 @@ private fun Step1Gender(
                 onDismissRequest = { meetDropdownExpanded = false },
                 modifier = Modifier
                     .fillMaxWidth(0.88f)
-                    .background(DarkMaroon)
+                    .background(Color.White)
             ) {
                 meetOptions.forEach { option ->
                     val isSelected = lookingFor == option
@@ -770,8 +760,8 @@ private fun Step1Gender(
                             ) {
                                 Text(
                                     text = option,
-                                    color = if (isSelected) SoftPink else Color.White,
-                                    fontSize = 13.sp,
+                                    color = if (isSelected) AccentPink else Color.Black,
+                                    fontSize = 14.sp,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                                 )
                                 if (isSelected) {
@@ -884,8 +874,8 @@ private fun Step2Birthday(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 shape = RoundedCornerShape(14.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = Color.White.copy(alpha = 0.95f),
-                    unfocusedContainerColor = Color.White.copy(alpha = 0.9f),
+                    focusedContainerColor = Color.White,
+                    unfocusedContainerColor = Color.White,
                     focusedBorderColor = AccentPink,
                     unfocusedBorderColor = Color.Transparent,
                     focusedTextColor = Color.Black,
@@ -903,8 +893,8 @@ private fun Step2Birthday(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 shape = RoundedCornerShape(14.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = Color.White.copy(alpha = 0.95f),
-                    unfocusedContainerColor = Color.White.copy(alpha = 0.9f),
+                    focusedContainerColor = Color.White,
+                    unfocusedContainerColor = Color.White,
                     focusedBorderColor = AccentPink,
                     unfocusedBorderColor = Color.Transparent,
                     focusedTextColor = Color.Black,
@@ -922,8 +912,8 @@ private fun Step2Birthday(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 shape = RoundedCornerShape(14.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = Color.White.copy(alpha = 0.95f),
-                    unfocusedContainerColor = Color.White.copy(alpha = 0.9f),
+                    focusedContainerColor = Color.White,
+                    unfocusedContainerColor = Color.White,
                     focusedBorderColor = AccentPink,
                     unfocusedBorderColor = Color.Transparent,
                     focusedTextColor = Color.Black,
@@ -937,12 +927,12 @@ private fun Step2Birthday(
         if (year.length == 4) {
             Surface(
                 shape = RoundedCornerShape(50),
-                color = Color.White.copy(alpha = 0.95f),
+                color = Color.White,
                 modifier = Modifier.align(Alignment.Start)
             ) {
                 Text(
                     text = if (age >= 18) "Age: $age years old" else "Age: $age (Must be 18+)",
-                    color = if (age >= 18) Color.White else SoftPink,
+                    color = if (age >= 18) Color.Black else AccentPink,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
@@ -966,14 +956,12 @@ private fun Step3Location(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     var isLocating by remember { mutableStateOf(false) }
+    var locError by remember { mutableStateOf<String?>(null) }
 
-    fun fetchDeviceLocation() {
+    fun performFetch() {
         isLocating = true
+        locError = null
         coroutineScope.launch {
-            if (!LocationHelper.isGpsEnabled(context)) {
-                isLocating = false
-                return@launch
-            }
             val loc = LocationHelper.getCurrentLocation(context)
             if (loc != null) {
                 onCityChange(loc.fullLocation, loc.latitude, loc.longitude)
@@ -982,9 +970,48 @@ private fun Step3Location(
                     onCountryDetected(loc.countryName, loc.countryCode, minAge)
                 }
             } else {
-                onCityChange("", null, null)
+                // NEVER wipe a city the user already typed/has — just tell them.
+                locError = "Couldn't get your location. Turn on GPS and retry, or type your city below."
             }
             isLocating = false
+        }
+    }
+
+    // System "Turn on GPS?" dialog launcher — this is what actually flips the
+    // phone's location ON when the user confirms (was completely missing before).
+    val gpsResolutionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            performFetch()
+        } else {
+            isLocating = false
+            locError = "Location stays off. Turn on GPS to auto-detect your city, or type it below."
+        }
+    }
+
+    fun startLocationFlow() {
+        isLocating = true
+        locError = null
+        coroutineScope.launch {
+            when (val gps = LocationHelper.checkGpsSettings(context)) {
+                is GpsCheck.Enabled -> performFetch()
+                is GpsCheck.Resolvable -> {
+                    try {
+                        gpsResolutionLauncher.launch(
+                            IntentSenderRequest.Builder(gps.pendingIntent.intentSender).build()
+                        )
+                        // isLocating stays true until the dialog result arrives.
+                    } catch (e: Exception) {
+                        isLocating = false
+                        locError = "Couldn't open the GPS prompt. Enable location in Settings, then retry."
+                    }
+                }
+                GpsCheck.Unresolvable -> {
+                    isLocating = false
+                    locError = "GPS is turned off on this phone. Enable location in Settings and try again."
+                }
+            }
         }
     }
 
@@ -994,16 +1021,17 @@ private fun Step3Location(
         val granted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
                       permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         if (granted) {
-            fetchDeviceLocation()
+            startLocationFlow()
         } else {
             isLocating = false
+            locError = "Location permission is needed to auto-detect your city. You can also type it below."
         }
     }
 
-    // Auto-fetch location on step load if permission already granted
+    // Auto-run the full flow (permission -> GPS dialog -> fetch) on step load.
     LaunchedEffect(Unit) {
         if (LocationHelper.hasLocationPermission(context)) {
-            fetchDeviceLocation()
+            startLocationFlow()
         }
     }
 
@@ -1031,10 +1059,11 @@ private fun Step3Location(
         )
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Location Card Container with Place icon, TextField, and MyLocation Crosshair
+        // Location Card Container — REAL WHITE background + BLACK text (user requirement)
         Surface(
             shape = RoundedCornerShape(16.dp),
-            color = Color.White.copy(alpha = 0.08f),
+            color = Color.White,
+            border = BorderStroke(1.dp, if (isLocating) AccentPink else Color(0xFFDDDDDD)),
             modifier = Modifier
                 .fillMaxWidth()
                 .height(62.dp)
@@ -1056,9 +1085,9 @@ private fun Step3Location(
                     value = city,
                     onValueChange = { onCityChange(it, null, null) },
                     textStyle = TextStyle(
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Normal
+                        color = Color.Black,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
                     ),
                     singleLine = true,
                     cursorBrush = SolidColor(AccentPink),
@@ -1066,8 +1095,8 @@ private fun Step3Location(
                         if (city.isEmpty()) {
                             Text(
                                 text = "City, State, Country",
-                                color = Color.Gray,
-                                fontSize = 13.sp
+                                color = Color(0xFF6E6E6E),
+                                fontSize = 14.sp
                             )
                         }
                         innerTextField()
@@ -1079,19 +1108,23 @@ private fun Step3Location(
 
                 if (isLocating) {
                     CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
+                        modifier = Modifier.size(22.dp),
                         color = AccentPink,
                         strokeWidth = 2.dp
                     )
                 } else {
                     IconButton(
                         onClick = {
-                            permissionLauncher.launch(
-                                arrayOf(
-                                    Manifest.permission.ACCESS_FINE_LOCATION,
-                                    Manifest.permission.ACCESS_COARSE_LOCATION
+                            if (LocationHelper.hasLocationPermission(context)) {
+                                startLocationFlow()
+                            } else {
+                                permissionLauncher.launch(
+                                    arrayOf(
+                                        Manifest.permission.ACCESS_FINE_LOCATION,
+                                        Manifest.permission.ACCESS_COARSE_LOCATION
+                                    )
                                 )
-                            )
+                            }
                         },
                         modifier = Modifier.size(36.dp)
                     ) {
@@ -1108,11 +1141,46 @@ private fun Step3Location(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        Text(
-            text = "Tap the icon to use your current location",
-            color = Color.White.copy(alpha = 0.65f),
-            fontSize = 13.sp
-        )
+        if (isLocating) {
+            // Fetching state — visible progress + label, not a silent freeze.
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                LinearProgressIndicator(
+                    modifier = Modifier.weight(1f).height(3.dp).clip(RoundedCornerShape(50)),
+                    color = AccentPink,
+                    trackColor = Color.White.copy(alpha = 0.25f)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = "Fetching your location...",
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        } else if (locError != null) {
+            // Always-visible error message when GPS/permission/fix fails.
+            Text(
+                text = locError!!,
+                color = AccentPink,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+                fontWeight = FontWeight.Medium
+            )
+        } else if (city.isNotBlank()) {
+            Text(
+                text = "📍 Location set: $city",
+                color = Color.White.copy(alpha = 0.9f),
+                fontSize = 13.sp
+            )
+        } else {
+            Text(
+                text = "Tap the icon to use your current location",
+                color = Color.White.copy(alpha = 0.65f),
+                fontSize = 13.sp
+            )
+        }
 
         Spacer(modifier = Modifier.height(36.dp))
 
@@ -1520,7 +1588,7 @@ private fun Step5Basics(
 
         Surface(
             shape = RoundedCornerShape(16.dp),
-            color = Color.White.copy(alpha = 0.08f),
+            color = Color.White,
             modifier = Modifier.fillMaxWidth()
         ) {
             BasicTextField(
@@ -1676,121 +1744,7 @@ private fun Step7Goal(
 }
 
 // -------------------------------------------------------------
-// STEP 8: PROMPTS
-// -------------------------------------------------------------
-@Composable
-private fun Step8Prompts(
-    prompts: List<PromptItem>,
-    onPromptQuestionChange: (Int, String) -> Unit,
-    onPromptAnswerChange: (Int, String) -> Unit
-) {
-    Column {
-        Text(
-            text = "Give them a way in.",
-            color = Color.White,
-            fontSize = 22.sp,
-            fontWeight = FontWeight.Bold
-        )
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-            text = "Answer two quick prompts.",
-            color = Color.White.copy(alpha = 0.85f),
-            fontSize = 13.sp,
-            lineHeight = 18.sp
-        )
-        Spacer(modifier = Modifier.height(20.dp))
-
-        prompts.forEachIndexed { index, prompt ->
-            var expandedDropdown by remember { mutableStateOf(false) }
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 20.dp)
-            ) {
-                Text(
-                    text = "Prompt ${index + 1}",
-                    color = Color.White.copy(alpha = 0.9f),
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Box {
-                    Surface(
-                        onClick = { expandedDropdown = true },
-                        shape = RoundedCornerShape(14.dp),
-                        color = Color.White.copy(alpha = 0.95f),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(14.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = prompt.question,
-                                color = Color.Black,
-                                fontSize = 14.sp,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Icon(
-                                imageVector = Icons.Default.KeyboardArrowDown,
-                                contentDescription = null,
-                                tint = Color.White.copy(alpha = 0.7f)
-                            )
-                        }
-                    }
-
-                    DropdownMenu(
-                        expanded = expandedDropdown,
-                        onDismissRequest = { expandedDropdown = false },
-                        modifier = Modifier
-                            .fillMaxWidth(0.88f)
-                            .background(DarkMaroon)
-                    ) {
-                        promptOptions.forEach { opt ->
-                            DropdownMenuItem(
-                                text = { Text(opt, color = Color.White, fontSize = 14.sp) },
-                                onClick = {
-                                    onPromptQuestionChange(index, opt)
-                                    expandedDropdown = false
-                                }
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                OutlinedTextField(
-                    value = prompt.answer,
-                    onValueChange = { if (it.length <= 120) onPromptAnswerChange(index, it) },
-                    placeholder = { Text("Write your answer...", color = Color.White.copy(alpha = 0.55f)) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 80.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = Color.White.copy(alpha = 0.95f),
-                        unfocusedContainerColor = Color.White.copy(alpha = 0.9f),
-                        focusedBorderColor = AccentPink,
-                        unfocusedBorderColor = Color.Transparent,
-                        focusedTextColor = Color.Black,
-                        unfocusedTextColor = Color.Black,
-                        cursorColor = AccentPink
-                    ),
-                    maxLines = 3
-                )
-            }
-        }
-    }
-}
-
-// -------------------------------------------------------------
-// STEP 9: FINE-TUNE PREFERENCES
+// STEP 8: FINE-TUNE PREFERENCES
 // -------------------------------------------------------------
 @Composable
 private fun Step9Preferences(
@@ -1869,8 +1823,8 @@ private fun Step9Preferences(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 shape = RoundedCornerShape(14.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = Color.White.copy(alpha = 0.95f),
-                    unfocusedContainerColor = Color.White.copy(alpha = 0.9f),
+                    focusedContainerColor = Color.White,
+                    unfocusedContainerColor = Color.White,
                     focusedBorderColor = AccentPink,
                     unfocusedBorderColor = Color.Transparent,
                     focusedTextColor = Color.Black,
@@ -1891,8 +1845,8 @@ private fun Step9Preferences(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 shape = RoundedCornerShape(14.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = Color.White.copy(alpha = 0.95f),
-                    unfocusedContainerColor = Color.White.copy(alpha = 0.9f),
+                    focusedContainerColor = Color.White,
+                    unfocusedContainerColor = Color.White,
                     focusedBorderColor = AccentPink,
                     unfocusedBorderColor = Color.Transparent,
                     focusedTextColor = Color.Black,
