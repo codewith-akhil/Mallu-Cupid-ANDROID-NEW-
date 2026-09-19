@@ -205,7 +205,7 @@ fun OnboardingScreen(
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Back",
-                        tint = Color.White.copy(alpha = 0.9f)
+                        tint = Color.White
                     )
                 }
 
@@ -855,7 +855,7 @@ private fun Step2Birthday(
 
         Text(
             text = "Date of birth",
-            color = Color.White.copy(alpha = 0.9f),
+            color = Color.White,
             fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold
         )
@@ -956,61 +956,32 @@ private fun Step3Location(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     var isLocating by remember { mutableStateOf(false) }
-    var locError by remember { mutableStateOf<String?>(null) }
+    var locationError by remember { mutableStateOf<String?>(null) }
 
-    fun performFetch() {
+    fun fetchDeviceLocation() {
         isLocating = true
-        locError = null
+        locationError = null
         coroutineScope.launch {
+            // Check if GPS is enabled
+            if (!LocationHelper.isGpsEnabled(context)) {
+                isLocating = false
+                locationError = "GPS is turned off. Please enable location in your phone settings."
+                LocationHelper.openLocationSettings(context)
+                return@launch
+            }
+            
             val loc = LocationHelper.getCurrentLocation(context)
+            isLocating = false
             if (loc != null) {
                 onCityChange(loc.fullLocation, loc.latitude, loc.longitude)
+                locationError = null
                 if (loc.countryCode.isNotBlank()) {
                     val minAge = SupabaseRepository.getMinAgeForCountry(loc.countryCode)
                     onCountryDetected(loc.countryName, loc.countryCode, minAge)
                 }
             } else {
-                // NEVER wipe a city the user already typed/has — just tell them.
-                locError = "Couldn't get your location. Turn on GPS and retry, or type your city below."
-            }
-            isLocating = false
-        }
-    }
-
-    // System "Turn on GPS?" dialog launcher — this is what actually flips the
-    // phone's location ON when the user confirms (was completely missing before).
-    val gpsResolutionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartIntentSenderForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            performFetch()
-        } else {
-            isLocating = false
-            locError = "Location stays off. Turn on GPS to auto-detect your city, or type it below."
-        }
-    }
-
-    fun startLocationFlow() {
-        isLocating = true
-        locError = null
-        coroutineScope.launch {
-            when (val gps = LocationHelper.checkGpsSettings(context)) {
-                is GpsCheck.Enabled -> performFetch()
-                is GpsCheck.Resolvable -> {
-                    try {
-                        gpsResolutionLauncher.launch(
-                            IntentSenderRequest.Builder(gps.pendingIntent.intentSender).build()
-                        )
-                        // isLocating stays true until the dialog result arrives.
-                    } catch (e: Exception) {
-                        isLocating = false
-                        locError = "Couldn't open the GPS prompt. Enable location in Settings, then retry."
-                    }
-                }
-                GpsCheck.Unresolvable -> {
-                    isLocating = false
-                    locError = "GPS is turned off on this phone. Enable location in Settings and try again."
-                }
+                locationError = "Could not get your location. Please type your city manually."
+                onCityChange("", null, null)
             }
         }
     }
@@ -1021,17 +992,17 @@ private fun Step3Location(
         val granted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
                       permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         if (granted) {
-            startLocationFlow()
+            fetchDeviceLocation()
         } else {
             isLocating = false
-            locError = "Location permission is needed to auto-detect your city. You can also type it below."
+            locationError = "Location permission denied. You can type your city manually."
         }
     }
 
-    // Auto-run the full flow (permission -> GPS dialog -> fetch) on step load.
+    // Auto-fetch location on step load if permission already granted
     LaunchedEffect(Unit) {
         if (LocationHelper.hasLocationPermission(context)) {
-            startLocationFlow()
+            fetchDeviceLocation()
         }
     }
 
@@ -1059,64 +1030,55 @@ private fun Step3Location(
         )
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Location Card Container — REAL WHITE background + BLACK text (user requirement)
+        // Location Card
         Surface(
             shape = RoundedCornerShape(16.dp),
             color = Color.White,
-            border = BorderStroke(1.dp, if (isLocating) AccentPink else Color(0xFFDDDDDD)),
             modifier = Modifier
                 .fillMaxWidth()
-                .height(62.dp)
+                .height(52.dp)
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 16.dp),
+                    .padding(horizontal = 14.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
                     imageVector = Icons.Default.Place,
                     contentDescription = "Location",
-                    tint = AccentPink,
-                    modifier = Modifier.size(24.dp)
+                    tint = Color.Gray,
+                    modifier = Modifier.size(20.dp)
                 )
-
-                BasicTextField(
+                Spacer(modifier = Modifier.width(10.dp))
+                OutlinedTextField(
                     value = city,
                     onValueChange = { onCityChange(it, null, null) },
-                    textStyle = TextStyle(
-                        color = Color.Black,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold
-                    ),
+                    placeholder = { Text("Enter your city", color = Color.Gray, fontSize = 13.sp) },
+                    modifier = Modifier.weight(1f),
                     singleLine = true,
-                    cursorBrush = SolidColor(AccentPink),
-                    decorationBox = { innerTextField ->
-                        if (city.isEmpty()) {
-                            Text(
-                                text = "City, State, Country",
-                                color = Color(0xFF6E6E6E),
-                                fontSize = 14.sp
-                            )
-                        }
-                        innerTextField()
-                    },
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 12.dp)
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = Color.White,
+                        unfocusedContainerColor = Color.White,
+                        focusedBorderColor = Color.Transparent,
+                        unfocusedBorderColor = Color.Transparent,
+                        focusedTextColor = Color.Black,
+                        unfocusedTextColor = Color.Black,
+                        cursorColor = AccentPink
+                    ),
+                    textStyle = LocalTextStyle.current.copy(fontSize = 14.sp)
                 )
-
                 if (isLocating) {
                     CircularProgressIndicator(
-                        modifier = Modifier.size(22.dp),
-                        color = AccentPink,
-                        strokeWidth = 2.dp
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                        color = AccentPink
                     )
                 } else {
                     IconButton(
                         onClick = {
                             if (LocationHelper.hasLocationPermission(context)) {
-                                startLocationFlow()
+                                fetchDeviceLocation()
                             } else {
                                 permissionLauncher.launch(
                                     arrayOf(
@@ -1126,102 +1088,55 @@ private fun Step3Location(
                                 )
                             }
                         },
-                        modifier = Modifier.size(36.dp)
+                        modifier = Modifier.size(32.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.MyLocation,
-                            contentDescription = "Tap the icon to use your current location",
+                            contentDescription = "Detect location",
                             tint = AccentPink,
-                            modifier = Modifier.size(22.dp)
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        if (isLocating) {
-            // Fetching state — visible progress + label, not a silent freeze.
-            Row(
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                LinearProgressIndicator(
-                    modifier = Modifier.weight(1f).height(3.dp).clip(RoundedCornerShape(50)),
-                    color = AccentPink,
-                    trackColor = Color.White.copy(alpha = 0.25f)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Text(
-                    text = "Fetching your location...",
-                    color = Color.White,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-        } else if (locError != null) {
-            // Always-visible error message when GPS/permission/fix fails.
+        // Error message
+        if (locationError != null) {
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = locError!!,
-                color = AccentPink,
-                fontSize = 13.sp,
-                lineHeight = 18.sp,
-                fontWeight = FontWeight.Medium
-            )
-        } else if (city.isNotBlank()) {
-            Text(
-                text = "📍 Location set: $city",
-                color = Color.White.copy(alpha = 0.9f),
-                fontSize = 13.sp
-            )
-        } else {
-            Text(
-                text = "Tap the icon to use your current location",
-                color = Color.White.copy(alpha = 0.65f),
-                fontSize = 13.sp
+                text = locationError!!,
+                color = SoftPink,
+                fontSize = 12.sp,
+                lineHeight = 16.sp
             )
         }
 
-        Spacer(modifier = Modifier.height(36.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
-        // Maximum Distance Section
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Maximum distance",
-                color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = "$distance km",
-                color = AccentPink,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
+        // Distance slider
+        Text(
+            text = "Maximum distance",
+            color = Color.White,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "$distance km",
+            color = SoftPink,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold
+        )
         Slider(
             value = distance.toFloat(),
             onValueChange = { onDistanceChange(it.toInt()) },
             valueRange = 5f..200f,
             colors = SliderDefaults.colors(
-                thumbColor = Color.White,
-                activeTrackColor = AccentPink,
-                inactiveTrackColor = Color.White.copy(alpha = 0.25f),
-                activeTickColor = Color.Transparent,
-                inactiveTickColor = Color.Transparent
-            ),
-            modifier = Modifier.fillMaxWidth()
+                thumbColor = AccentPink,
+                activeTrackColor = AccentPink
+            )
         )
-
-        Spacer(modifier = Modifier.height(4.dp))
-
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
@@ -1297,9 +1212,9 @@ private fun Step4Photos(
                         Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .aspectRatio(0.82f)
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(Color.White.copy(alpha = 0.1f))
+                                .aspectRatio(0.8f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color.White.copy(alpha = 0.08f))
                                 .then(
                                     if (isDragged) Modifier
                                         .offset {
@@ -1793,7 +1708,7 @@ private fun Step9Preferences(
         ) {
             Text(
                 text = "Preferred age range",
-                color = Color.White.copy(alpha = 0.9f),
+                color = Color.White,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold
             )
@@ -1860,7 +1775,7 @@ private fun Step9Preferences(
 
         Text(
             text = "Deal breakers",
-            color = Color.White.copy(alpha = 0.9f),
+            color = Color.White,
             fontSize = 14.sp,
             fontWeight = FontWeight.SemiBold
         )

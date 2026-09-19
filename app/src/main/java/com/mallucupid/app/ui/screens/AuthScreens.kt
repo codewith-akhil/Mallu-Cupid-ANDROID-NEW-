@@ -162,7 +162,7 @@ fun SignInScreen(
                 ) {
                     Text(
                         text = "Don't have an account? ",
-                        color = Color.White.copy(alpha = 0.9f),
+                        color = Color.White,
                         fontSize = if (isCompact) 14.sp else 15.sp
                     )
                     TextButton(
@@ -351,7 +351,7 @@ fun SignUpScreen(
                 ) {
                     Text(
                         text = "Already have an account? ",
-                        color = Color.White.copy(alpha = 0.9f),
+                        color = Color.White,
                         fontSize = if (isCompact) 14.sp else 15.sp
                     )
                     TextButton(
@@ -433,8 +433,8 @@ fun AuthTextField(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(14.dp),
             colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = Color.White.copy(alpha = 0.95f),
-                unfocusedContainerColor = Color.White.copy(alpha = 0.9f),
+                focusedContainerColor = Color.White,
+                unfocusedContainerColor = Color.White,
                 focusedBorderColor = borderColor,
                 unfocusedBorderColor = borderColor,
                 focusedTextColor = Color.Black,

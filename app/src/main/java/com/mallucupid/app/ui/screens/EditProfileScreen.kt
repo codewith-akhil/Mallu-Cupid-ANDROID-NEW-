@@ -358,7 +358,7 @@ fun EditProfileScreen(
                         )
                     },
                     divider = {
-                        HorizontalDivider(color = Color(0xFF382D27))
+                        HorizontalDivider(color = Color(0xFFE0E0E0))
                     }
                 ) {
                     Tab(
@@ -494,14 +494,14 @@ fun EditProfileScreen(
                                                 alpha = if (isDragged) 0.92f else 1f
                                             )
                                             .clip(RoundedCornerShape(14.dp))
-                                            .background(Color(0xFF261E1A))
+                                            .background(Color.White)
                                             .border(
                                                 width = 1.dp,
                                                 color = when {
                                                     photoUrl != null && isDragged -> DashboardPeach
                                                     photoUrl != null && isDropTarget -> TinderGold
                                                     photoUrl != null -> DashboardPeach.copy(alpha = 0.3f)
-                                                    else -> Color(0xFF3F322B)
+                                                    else -> Color(0xFFCCCCCC)
                                                 },
                                                 shape = RoundedCornerShape(14.dp)
                                             )
@@ -573,7 +573,7 @@ fun EditProfileScreen(
                                             Surface(
                                                 shape = CircleShape,
                                                 color = Color(0xCC201B18),
-                                                border = BorderStroke(1.dp, Color(0xFF42342D)),
+                                                border = BorderStroke(1.dp, Color(0xFFCCCCCC)),
                                                 modifier = Modifier
                                                     .align(Alignment.TopStart)
                                                     .padding(4.dp)
@@ -622,7 +622,7 @@ fun EditProfileScreen(
                                                 },
                                                 shape = CircleShape,
                                                 color = Color(0xCC201B18),
-                                                border = BorderStroke(1.dp, Color(0xFF42342D)),
+                                                border = BorderStroke(1.dp, Color(0xFFCCCCCC)),
                                                 modifier = Modifier
                                                     .align(Alignment.TopEnd)
                                                     .padding(4.dp)
@@ -736,7 +736,7 @@ fun EditProfileScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(Color(0xFF2B221E), RoundedCornerShape(10.dp))
+                                .background(Color.White, RoundedCornerShape(10.dp))
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
@@ -761,7 +761,7 @@ fun EditProfileScreen(
                                     checkedThumbColor = Color.White,
                                     checkedTrackColor = DashboardTerracotta,
                                     uncheckedThumbColor = DashboardNavMuted,
-                                    uncheckedTrackColor = Color(0xFF382D27)
+                                    uncheckedTrackColor = Color(0xFFE0E0E0)
                                 )
                             )
                         }
@@ -1172,8 +1172,8 @@ fun EditProfileScreen(
                         val shareLink = "https://mallucupid.app/u/${draft.username.ifBlank { "user" }}"
                         Surface(
                             shape = RoundedCornerShape(10.dp),
-                            color = Color(0xFF261E1A),
-                            border = BorderStroke(1.dp, Color(0xFF42342D)),
+                            color = Color.White,
+                            border = BorderStroke(1.dp, Color(0xFFCCCCCC)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
@@ -1281,7 +1281,7 @@ fun EditProfileScreen(
                                 showHelpDialog = true
                             }
                         )
-                        HorizontalDivider(color = Color(0xFF382D27))
+                        HorizontalDivider(color = Color(0xFFE0E0E0))
 
                         GroupedActionRow(
                             title = "Community Guidelines",
@@ -1292,7 +1292,7 @@ fun EditProfileScreen(
                                 showHelpDialog = true
                             }
                         )
-                        HorizontalDivider(color = Color(0xFF382D27))
+                        HorizontalDivider(color = Color(0xFFE0E0E0))
 
                         GroupedActionRow(
                             title = "Help & Support Desk",
@@ -1324,7 +1324,7 @@ fun EditProfileScreen(
                                 showLegalDialog = true
                             }
                         )
-                        HorizontalDivider(color = Color(0xFF382D27))
+                        HorizontalDivider(color = Color(0xFFE0E0E0))
 
                         GroupedActionRow(
                             title = "Privacy Policy",
@@ -1335,7 +1335,7 @@ fun EditProfileScreen(
                                 showLegalDialog = true
                             }
                         )
-                        HorizontalDivider(color = Color(0xFF382D27))
+                        HorizontalDivider(color = Color(0xFFE0E0E0))
 
                         GroupedActionRow(
                             title = "Cookie & Location Preferences",
@@ -1615,7 +1615,7 @@ private fun DashboardSectionCard(
     Surface(
         shape = RoundedCornerShape(18.dp),
         color = DashboardCard,
-        border = BorderStroke(1.dp, Color(0xFF42342D)),
+        border = BorderStroke(1.dp, Color(0xFFCCCCCC)),
         shadowElevation = 2.dp,
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -1623,7 +1623,7 @@ private fun DashboardSectionCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Surface(
                     shape = RoundedCornerShape(8.dp),
-                    color = Color(0xFF261E1A),
+                    color = Color.White,
                     modifier = Modifier.size(32.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
@@ -1825,7 +1825,7 @@ private fun GroupedActionRow(
     ) {
         Surface(
             shape = CircleShape,
-            color = Color(0xFF261E1A),
+            color = Color.White,
             modifier = Modifier.size(36.dp)
         ) {
             Box(contentAlignment = Alignment.Center) {
@@ -1870,3 +1870,64 @@ private fun darkFieldColors() = OutlinedTextFieldDefaults.colors(
     unfocusedContainerColor = Color.White,
     cursorColor = DashboardTerracotta
 )
+
+
+@Composable
+private fun DropdownSelector(
+    label: String,
+    options: List<String>,
+    selectedOption: String,
+    onSelect: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier = Modifier.fillMaxWidth()) {
+        Surface(
+            onClick = { expanded = true },
+            shape = RoundedCornerShape(12.dp),
+            color = Color.White,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (selectedOption.isNotBlank()) selectedOption else label,
+                    color = if (selectedOption.isNotBlank()) Color.Black else Color.Gray,
+                    fontSize = 13.sp
+                )
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowDown,
+                    contentDescription = "Select",
+                    tint = Color.Gray
+                )
+            }
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.background(Color.White)
+        ) {
+            options.forEach { option ->
+                val isSelected = selectedOption == option
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = option,
+                            color = if (isSelected) DashboardTerracotta else Color.Black,
+                            fontSize = 13.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                        )
+                    },
+                    onClick = {
+                        onSelect(option)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
