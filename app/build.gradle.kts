@@ -17,8 +17,8 @@ android {
     applicationId = "com.mallucupid.connect"
     minSdk = 26
     targetSdk = 36
-    versionCode = 1007
-    versionName = "1.0.7"
+    versionCode = 1011
+    versionName = "1.0.11"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -98,6 +98,8 @@ dependencies {
   // implementation(libs.androidx.navigation.compose)
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
+  implementation(libs.androidx.play.billing)
+  implementation(libs.androidx.security.crypto)
   implementation(libs.coil.compose)
   implementation(libs.converter.moshi)
   implementation(libs.firebase.ai)
