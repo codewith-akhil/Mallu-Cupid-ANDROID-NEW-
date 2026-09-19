@@ -27,6 +27,9 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlin.coroutines.coroutineContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -136,8 +139,8 @@ fun DashboardScreen(
             // Initial fetch — immediate.
             unreadChatCount = runCatching { SupabaseRepository.getUnreadMessageCount(uid) }.getOrDefault(0)
             // Poll every 30s while the dashboard is alive.
-            while (kotlinx.coroutines.coroutineContext.isActive) {
-                kotlinx.coroutines.delay(30_000L)
+            while (coroutineContext.isActive) {
+                delay(30_000L)
                 unreadChatCount = runCatching { SupabaseRepository.getUnreadMessageCount(uid) }.getOrDefault(unreadChatCount)
             }
         }
