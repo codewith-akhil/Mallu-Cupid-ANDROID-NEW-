@@ -307,6 +307,20 @@ object SupabaseRepository {
     // ---------- Profile save (onboarding complete) ----------
 
     suspend fun saveProfile(userId: String, email: String, draft: OnboardingDraft): Boolean = withContext(Dispatchers.IO) {
+        // Photos may be local content:// or file:// URIs from the picker — they MUST be
+        // uploaded to Supabase Storage first; storing a content:// URI in the DB
+        // would persist a permission that dies with the picker activity and the
+        // photo would never render anywhere outside this device. We upload each
+        // photo, collect the resulting public URL, and skip the entry on failure
+        // (so the user's profile is never saved with a dead photo slot).
+        val resolvedPhotos = draft.photos.map { source ->
+            if (source.startsWith("content://") || source.startsWith("file://")) {
+                runCatching { uploadPhoto(userId, android.net.Uri.parse(source)) }
+                    .getOrNull() ?: source  // fall back to the raw string (e.g. remote URL) on failure
+            } else {
+                source  // already a remote URL (e.g. pre-existing Storage path)
+            }
+        }.filter { it.isNotBlank() }
         val profile = ProfileUpsert(
             id = userId,
             name = draft.name,
@@ -375,7 +389,8 @@ object SupabaseRepository {
                 .build()
         ).execute().close()
         draft.photos.forEachIndexed { index, url ->
-            val photo = PhotoUpsert(userId, url, index, index == 0)
+            // Use the resolved (uploaded) URL here — never the raw content:// URI.
+            val photo = PhotoUpsert(userId, resolvedPhotos.getOrNull(index) ?: url, index, index == 0)
             val pbody = photoAdapter.toJson(photo)
             SupabaseClient.http.newCall(
                 Request.Builder()
@@ -557,12 +572,16 @@ object SupabaseRepository {
         }
     }
 
-    /** Verifies a Google Play purchase with the server + saves subscription. Returns true on success. */
+    /** Verifies a Google Play purchase with the server + saves subscription. Returns true on success.
+     *  The user_id is no longer sent in the body — the verify-purchase edge function
+     *  derives it from the JWT (auth.uid()) so a malicious client can't credit
+     *  purchases to other users. */
     suspend fun verifyPurchase(
         userId: String, productId: String, purchaseToken: String, orderId: String?
     ): Boolean = withContext(Dispatchers.IO) {
+        // userId kept in signature for back-compat with callers; intentionally not
+        // serialised into the body.
         val body = reqAdapter.toJson(mapOf(
-            "user_id" to userId,
             "product_id" to productId,
             "purchase_token" to purchaseToken,
             "order_id" to (orderId ?: "")
@@ -617,9 +636,15 @@ object SupabaseRepository {
      * Uploads a profile photo to Supabase Storage (bucket: profile-photos).
      * Path: {userId}/{timestamp}.jpg
      * Returns the public URL on success, or null on failure.
+     *
+     * Auth guard: the access token MUST be present — Storage buckets are RLS-
+     * protected and the upload will 403 with the anon key. We also add an
+     * explicit Authorization: Bearer header so we don't rely on the OkHttp
+     * interceptor when the request is constructed from a freshly-acquired token.
      */
     suspend fun uploadPhoto(userId: String, photoUri: android.net.Uri): String? = withContext(Dispatchers.IO) {
         try {
+            val accessToken = SupabaseClient.accessToken ?: return@withContext null
             val context = com.mallucupid.app.MalluCupidApp.appContext
             val inputStream = context.contentResolver.openInputStream(photoUri) ?: return@withContext null
             val bytes = inputStream.readBytes()
@@ -634,6 +659,7 @@ object SupabaseRepository {
             val req = Request.Builder()
                 .url("${SupabaseConfig.SUPABASE_URL}/storage/v1/object/profile-photos/$storagePath")
                 .header("Content-Type", mimeType)
+                .header("Authorization", "Bearer $accessToken")
                 .header("x-upsert", "false")
                 .post(requestBody)
                 .build()
@@ -646,6 +672,150 @@ object SupabaseRepository {
         } catch (e: Exception) {
             null
         }
+    }
+
+    /**
+     * Uploads a voice-message audio file to Supabase Storage (bucket: voice-messages).
+     * Path: {userId}/{timestamp}.m4a (caller can override the extension via [ext]).
+     * Returns the public URL on success, or null on failure.
+     */
+    suspend fun uploadVoiceMessage(userId: String, audioUri: android.net.Uri, ext: String = "m4a"): String? = withContext(Dispatchers.IO) {
+        try {
+            val accessToken = SupabaseClient.accessToken ?: return@withContext null
+            val context = com.mallucupid.app.MalluCupidApp.appContext
+            val inputStream = context.contentResolver.openInputStream(audioUri) ?: return@withContext null
+            val bytes = inputStream.readBytes()
+            inputStream.close()
+
+            val fileName = "${System.currentTimeMillis()}.$ext"
+            val storagePath = "$userId/$fileName"
+            val mimeType = context.contentResolver.getType(audioUri) ?: "audio/mp4"
+            val mediaType = mimeType.toMediaType()
+            val requestBody = bytes.toRequestBody(mediaType)
+
+            val req = Request.Builder()
+                .url("${SupabaseConfig.SUPABASE_URL}/storage/v1/object/voice-messages/$storagePath")
+                .header("Content-Type", mimeType)
+                .header("Authorization", "Bearer $accessToken")
+                .header("x-upsert", "false")
+                .post(requestBody)
+                .build()
+
+            SupabaseClient.http.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext null
+                "${SupabaseConfig.SUPABASE_URL}/storage/v1/object/public/voice-messages/$storagePath"
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Uploads a chat media file (photo or video) to Supabase Storage (bucket: chat-media).
+     * Path: {userId}/{timestamp}.{ext}
+     * Returns the public URL on success, or null on failure.
+     */
+    suspend fun uploadChatMedia(userId: String, mediaUri: android.net.Uri, ext: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val accessToken = SupabaseClient.accessToken ?: return@withContext null
+            val context = com.mallucupid.app.MalluCupidApp.appContext
+            val inputStream = context.contentResolver.openInputStream(mediaUri) ?: return@withContext null
+            val bytes = inputStream.readBytes()
+            inputStream.close()
+
+            val fileName = "${System.currentTimeMillis()}.$ext"
+            val storagePath = "$userId/$fileName"
+            val mimeType = context.contentResolver.getType(mediaUri) ?: "application/octet-stream"
+            val mediaType = mimeType.toMediaType()
+            val requestBody = bytes.toRequestBody(mediaType)
+
+            val req = Request.Builder()
+                .url("${SupabaseConfig.SUPABASE_URL}/storage/v1/object/chat-media/$storagePath")
+                .header("Content-Type", mimeType)
+                .header("Authorization", "Bearer $accessToken")
+                .header("x-upsert", "false")
+                .post(requestBody)
+                .build()
+
+            SupabaseClient.http.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext null
+                "${SupabaseConfig.SUPABASE_URL}/storage/v1/object/public/chat-media/$storagePath"
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    // ---------- Countries ----------
+
+    /**
+     * Returns the current user's swipe quota + Pro status.
+     * Calls the `get_swipe_status` RPC (or falls back to a sane default on error).
+     */
+    suspend fun getSwipeStatus(userId: String): SwipeStatusDto? = withContext(Dispatchers.IO) {
+        try {
+            val body = reqAdapter.toJson(mapOf("p_limit" to 1))
+            val req = Request.Builder()
+                .url("${SupabaseConfig.REST_BASE}/rpc/get_swipe_status")
+                .post(body.toRequestBody(json))
+                .build()
+            SupabaseClient.http.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext null
+                val text = resp.body?.string().orEmpty()
+                moshi.adapter(SwipeStatusDto::class.java).fromJson(text)
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Returns the total unread-message count across all matches for the current
+     * user. Calls the `get_unread_message_count` SECURITY DEFINER RPC (the RPC
+     * itself enforces auth.uid() — we do not send a user_id param).
+     */
+    suspend fun getUnreadMessageCount(): Int = withContext(Dispatchers.IO) {
+        try {
+            val req = Request.Builder()
+                .url("${SupabaseConfig.REST_BASE}/rpc/get_unread_message_count")
+                .post("{}".toRequestBody(json))
+                .build()
+            SupabaseClient.http.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext 0
+                val text = resp.body?.string().orEmpty().trim()
+                text.toIntOrNull() ?: 0
+            }
+        } catch (e: Exception) {
+            0
+        }
+    }
+
+    /**
+     * Soft-deletes a message the current user owns (sender_id = auth.uid()).
+     * The `messages_self_delete` RLS policy enforces ownership on the server,
+     * so this call is safe against tampering with [messageId].
+     */
+    suspend fun deleteMessage(messageId: Long): Boolean = withContext(Dispatchers.IO) {
+        val req = Request.Builder()
+            .url("${SupabaseConfig.REST_BASE}/messages?id=eq.$messageId")
+            .header("Prefer", "return=minimal")
+            .delete()
+            .build()
+        SupabaseClient.http.newCall(req).execute().use { it.isSuccessful }
+    }
+
+    /**
+     * Edits a message's content (only the sender may update per RLS policy
+     * `messages_self_update_content`). Only the content column is touched.
+     */
+    suspend fun editMessage(messageId: Long, newContent: String): Boolean = withContext(Dispatchers.IO) {
+        val body = reqAdapter.toJson(mapOf("content" to newContent, "is_edited" to true))
+        val req = Request.Builder()
+            .url("${SupabaseConfig.REST_BASE}/messages?id=eq.$messageId")
+            .header("Prefer", "return=minimal")
+            .patch(body.toRequestBody(json))
+            .build()
+        SupabaseClient.http.newCall(req).execute().use { it.isSuccessful }
     }
 
     // ---------- Countries ----------

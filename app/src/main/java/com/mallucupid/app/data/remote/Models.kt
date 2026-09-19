@@ -311,3 +311,14 @@ data class CountryDto(
     @Json(name = "iso_code") val isoCode: String? = null,
     @Json(name = "min_age") val minAge: Int? = null,
 )
+
+// ---------- Swipe quota / status ----------
+
+@JsonClass(generateAdapter = true)
+data class SwipeStatusDto(
+    @Json(name = "swipes_used") val swipesUsed: Int? = null,
+    @Json(name = "swipe_limit") val swipeLimit: Int? = null,
+    @Json(name = "swipe_remaining") val swipeRemaining: Int? = null,
+    @Json(name = "is_pro") val isPro: Boolean? = null,
+    @Json(name = "resets_at") val resetsAt: String? = null,
+)
