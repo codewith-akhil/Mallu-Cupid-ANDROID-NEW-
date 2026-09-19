@@ -3,6 +3,8 @@ package com.mallucupid.app.ui.screens
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.media.MediaMetadataRetriever
+import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
@@ -52,9 +54,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import coil.compose.AsyncImage
 import com.mallucupid.app.data.DatingProfile
 import com.mallucupid.app.data.remote.MatchDto
@@ -117,10 +122,16 @@ data class ChatMessageItem(
     // message is removed on failure.
     val isSending: Boolean = false,
     // Chat-Features — True when the message has been edited (PATCH /messages?id=eq.{id}).
-    // Renders a small "edited" label under the bubble and is set when the user
-    // confirms the edit dialog (SupabaseRepository.editMessage). Server-driven
-    // messages hydrate this from the `is_edited` column.
-    val isEdited: Boolean = false
+    // Renders a small "edited" label next to the timestamp and is set when the
+    // user confirms the edit dialog (SupabaseRepository.editMessage). Server-
+    // driven messages hydrate this from the `is_edited` column.
+    val isEdited: Boolean = false,
+    // Chat-Features — Real waveform amplitude samples captured during recording
+    // (maxAmplitude polled every 100ms while MediaRecorder is active). Used to
+    // render the voice-message bubble bars; falls back to a flat placeholder
+    // when empty (e.g. for messages received from the partner that don't carry
+    // waveform data).
+    val waveformSamples: List<Int> = emptyList()
 )
 
 data class ChatThreadItem(
@@ -380,10 +391,25 @@ fun ChatViewContent(
     // the message id so the play/pause icon flips per-row. Null when nothing is
     // playing.
     var voicePlaybackId by remember { mutableStateOf<String?>(null) }
-    var voiceMediaPlayer by remember { mutableStateOf<android.media.MediaPlayer?>(null) }
+    var voiceMediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
+    // Chat-Features — Playback progress 0..1f for the currently-playing voice
+    // message. Polled every 100ms via a LaunchedEffect while voicePlaybackId
+    // is non-null. Drives the LinearProgressIndicator under the play button.
+    var playbackProgress by remember { mutableFloatStateOf(0f) }
+    var playbackJob by remember { mutableStateOf<Job?>(null) }
+    // Chat-Features — Real waveform samples captured during voice recording
+    // (maxAmplitude polled every 100ms while MediaRecorder is active). Reset
+    // to empty when a new recording starts; consumed by the voice-send flow
+    // and attached to the outgoing ChatMessageItem.
+    var waveformSamples by remember { mutableStateOf<List<Int>>(emptyList()) }
+    // Chat-Features — In-conversation search overlay toggle. When true, an
+    // OutlinedTextField slides in above the message list and updates
+    // `searchQuery`; the conversationItems derivedStateOf filters by it.
+    var showConversationSearch by remember { mutableStateOf(false) }
     // Chat-Features — Realtime typing broadcast: last wall-clock ms we sent a
-    // `typing` event so we throttle to at most one event every 1.5s.
+    // `typing` event so we throttle to at most one event every 2s (per spec).
     var lastTypingBroadcastMs by remember { mutableLongStateOf(0L) }
+    var lastTypingEventReceivedMs by remember { mutableLongStateOf(0L) }
     // Chat-Features — Live reference to the Realtime websocket so the chat
     // input's onValueChange can broadcast `typing` events. Set by the
     // WebSocketListener.onOpen() in the DisposableEffect below.
@@ -421,6 +447,34 @@ fun ChatViewContent(
     // Chat-Wiring — True while the chat tray is fetching the user's matches
     // list from Supabase. Renders shimmer placeholder rows in the Messages list.
     var chatTrayLoading by remember { mutableStateOf(true) }
+
+    // Chat-Features — Voice playback lifecycle. Releases any active MediaPlayer
+    // + cancels the progress-polling coroutine when ChatViewContent leaves
+    // composition. (The conversation-scope onDispose also releases the player
+    // on conversation exit; this is the belt-and-suspenders for the case where
+    // the whole ChatViewContent is removed from the host without first exiting
+    // the conversation.)
+    DisposableEffect(Unit) {
+        onDispose {
+            playbackJob?.cancel()
+            runCatching { voiceMediaPlayer?.release() }
+            voiceMediaPlayer = null
+            voicePlaybackId = null
+            playbackProgress = 0f
+        }
+    }
+
+    // Chat-Features — Typing 5s auto-clear. Each time a `typing` broadcast
+    // arrives we record the wall-clock ms in `lastTypingEventReceivedMs`; this
+    // LaunchedEffect is keyed on that value so a fresh event cancels the
+    // previous wait and starts a new 5s timer. If no fresh event arrives
+    // within 5s, the delay completes and partnerIsTyping flips to false.
+    LaunchedEffect(lastTypingEventReceivedMs) {
+        if (lastTypingEventReceivedMs > 0L && partnerIsTyping) {
+            delay(5_000L)
+            partnerIsTyping = false
+        }
+    }
 
     // Fix 2 + Fix 4 — Fetch the user's matches + inbound likes once when the
     // chat tray is first shown. Populates `realMatches` / `realThreads` (for
@@ -550,6 +604,8 @@ fun ChatViewContent(
             val tempId = "msg_${System.currentTimeMillis()}"
             // Optimistic insert — isSending=true so a small spinner shows next to
             // the bubble while Supabase confirms the insert + Storage upload.
+            // videoDuration is left null here; the chatScope below fetches the
+            // real duration via MediaMetadataRetriever and patches the row.
             conversationMessages.add(
                 ChatMessageItem(
                     id = tempId,
@@ -558,13 +614,47 @@ fun ChatViewContent(
                     timestamp = "Just now",
                     type = msgType,
                     mediaUrl = uri.toString(),
-                    videoDuration = if (isVideo) "0:15" else null,
+                    videoDuration = null,
                     // Feature #20 — new sender messages start unread until partner "reads" them.
                     isRead = false,
                     isSending = true
                 )
             )
             Toast.makeText(context, if (isVideo) "Video sent securely" else "Photo sent securely", Toast.LENGTH_SHORT).show()
+
+            // Chat-Features — Real video duration via MediaMetadataRetriever
+            // (called off the main thread via Dispatchers.IO). Patches the
+            // optimistic ChatMessageItem with the resolved "m:ss" label so the
+            // bubble's duration badge reflects the actual video. No-op for
+            // images. Failures are swallowed (the bubble just stays without a
+            // duration badge).
+            if (isVideo) {
+                chatScope.launch {
+                    val durationLabel = runCatching {
+                        withContext(Dispatchers.IO) {
+                            val retriever = MediaMetadataRetriever()
+                            try {
+                                retriever.setDataSource(context, uri)
+                                val ms = retriever.extractMetadata(
+                                    MediaMetadataRetriever.METADATA_KEY_DURATION
+                                )?.toLongOrNull() ?: 0L
+                                val totalSecs = (ms / 1000L).toInt()
+                                "${totalSecs / 60}:${(totalSecs % 60).toString().padStart(2, '0')}"
+                            } finally {
+                                runCatching { retriever.release() }
+                            }
+                        }
+                    }.getOrNull()
+                    if (durationLabel != null) {
+                        val idx = conversationMessages.indexOfFirst { it.id == tempId }
+                        if (idx >= 0) {
+                            conversationMessages[idx] = conversationMessages[idx].copy(
+                                videoDuration = durationLabel
+                            )
+                        }
+                    }
+                }
+            }
 
             // Chat-Wiring — Upload the picked media to Supabase Storage (chat-media
             // bucket) BEFORE persisting the message row, then store the resulting
@@ -598,7 +688,10 @@ fun ChatViewContent(
                             content = if (isVideo) "Shared a video clip 🎥" else "Shared a photo 📷",
                             type = msgType.toSupabaseType(),
                             mediaUrl = uploadedUrl,
-                            audioDuration = if (isVideo) "0:15" else null,
+                            // Chat-Features — audio_duration is reserved for voice
+                            // messages; videos don't set it (the duration label is
+                            // local-only on the ChatMessageItem.videoDuration).
+                            audioDuration = null,
                             replyToId = null
                         )
                     }.getOrNull()
@@ -629,6 +722,9 @@ fun ChatViewContent(
     // file. Sets `mediaRecorderRef`, `voiceRecordingFile`, `recorderStartMs`,
     // and flips `isRecordingVoice = true` so the timer LaunchedEffect kicks in.
     // Safe to call from the long-press handler; re-entrant guard via `isRecordingVoice`.
+    // Chat-Features — Also resets `waveformSamples` so each recording starts
+    // from a clean slate; the timer LaunchedEffect polls maxAmplitude and
+    // appends to it.
     fun startVoiceRecording() {
         if (isRecordingVoice) return
         try {
@@ -652,6 +748,7 @@ fun ChatViewContent(
             voiceRecordingFile = audioFile
             recorderStartMs = System.currentTimeMillis()
             voiceRecordSeconds = 0
+            waveformSamples = emptyList()
             isRecordingVoice = true
         } catch (t: Throwable) {
             Toast.makeText(
@@ -665,15 +762,20 @@ fun ChatViewContent(
             voiceRecordingFile = null
             recorderStartMs = 0L
             voiceRecordSeconds = 0
+            waveformSamples = emptyList()
             isRecordingVoice = false
         }
     }
 
     // Fix 6 — Stops the active MediaRecorder and returns the recorded audio
     // bytes (or null on any failure). Always clears the recorder ref + file ref.
-    fun stopVoiceRecording(): ByteArray? {
-        val recorder = mediaRecorderRef ?: return null
+    // Chat-Features — Now returns a Pair of (audioBytes, waveformSamples)
+    // so the caller can attach the real amplitude list to the outgoing
+    // ChatMessageItem for proper waveform rendering on the bubble.
+    fun stopVoiceRecording(): Pair<ByteArray?, List<Int>> {
+        val recorder = mediaRecorderRef ?: return null to emptyList()
         val file = voiceRecordingFile
+        val capturedSamples = waveformSamples
         var bytes: ByteArray? = null
         try {
             recorder.stop()
@@ -690,10 +792,11 @@ fun ChatViewContent(
             voiceRecordingFile = null
             recorderStartMs = 0L
             voiceRecordSeconds = 0
+            waveformSamples = emptyList()
             isRecordingVoice = false
             file?.let { runCatching { it.delete() } }
         }
-        return bytes
+        return bytes to capturedSamples
     }
 
     // Fix 6 — Cancels the active recording without returning any bytes.
@@ -702,6 +805,7 @@ fun ChatViewContent(
             isRecordingVoice = false
             voiceRecordSeconds = 0
             recorderStartMs = 0L
+            waveformSamples = emptyList()
             return
         }
         try { recorder.stop() } catch (_: Throwable) {}
@@ -711,6 +815,7 @@ fun ChatViewContent(
         voiceRecordingFile = null
         recorderStartMs = 0L
         voiceRecordSeconds = 0
+        waveformSamples = emptyList()
         isRecordingVoice = false
     }
 
@@ -784,9 +889,10 @@ fun ChatViewContent(
     }
 
     // Fix 6 — Real recording timer. Derives elapsed seconds from the actual
-    // MediaRecorder start time (kept in `recorderStartMs`). Ticks every 250ms
-    // while `isRecordingVoice` is true so the UI feels live. Hard-caps at 30s
-    // (auto-stops the recorder + sets `isRecordingVoice = false`).
+    // MediaRecorder start time (kept in `recorderStartMs`). Ticks every 100ms
+    // while `isRecordingVoice` is true so the UI feels live AND so we can poll
+    // `MediaRecorder.maxAmplitude` to capture real waveform samples. Hard-caps
+    // at 30s (auto-stops the recorder + sets `isRecordingVoice = false`).
     LaunchedEffect(isRecordingVoice) {
         while (isRecordingVoice) {
             val elapsedMs = System.currentTimeMillis() - recorderStartMs
@@ -798,7 +904,17 @@ fun ChatViewContent(
                 break
             }
             voiceRecordSeconds = secs
-            delay(250L)
+            // Chat-Features — Poll maxAmplitude (0..32767) and append to the
+            // waveform samples list. Used by the voice-send flow to render a
+            // real waveform on the outgoing bubble. Swallow any error from
+            // a recorder that's already stopped/released.
+            runCatching {
+                val amp = mediaRecorderRef?.maxAmplitude ?: 0
+                if (amp > 0) {
+                    waveformSamples = waveformSamples + amp
+                }
+            }
+            delay(100L)
         }
     }
 
@@ -980,10 +1096,11 @@ fun ChatViewContent(
                             val event = root.optString("event")
                             // Chat-Features — Typing broadcast. Partner emits a
                             // `typing` broadcast event; we flip partnerIsTyping to
-                            // true and let it auto-false after 3s of silence (handled
-                            // in a separate LaunchedEffect below).
+                            // true and record the wall-clock ms so the 5s auto-
+                            // clear LaunchedEffect re-arms.
                             if (event == "typing") {
                                 partnerIsTyping = true
+                                lastTypingEventReceivedMs = System.currentTimeMillis()
                                 return
                             }
                             if (event != "postgres_changes") return
@@ -1218,6 +1335,23 @@ fun ChatViewContent(
                             )
                         }
 
+                        // Chat-Features — In-conversation search. Toggles an
+                        // OutlinedTextField overlay above the message list that
+                        // writes to `searchQuery`; the conversationItems
+                        // derivedStateOf filters by it. Tap again (or clear the
+                        // field) to dismiss.
+                        IconButton(onClick = {
+                            showConversationSearch = !showConversationSearch
+                            if (!showConversationSearch) searchQuery = ""
+                        }) {
+                            Icon(
+                                imageVector = if (showConversationSearch) Icons.Default.Close else Icons.Default.Search,
+                                contentDescription = "Search messages",
+                                tint = if (showConversationSearch) DashboardTerracotta else DashboardNavMuted,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+
                         IconButton(onClick = {
                             Toast.makeText(context, "Options for ${partner.name}", Toast.LENGTH_SHORT).show()
                         }) {
@@ -1225,6 +1359,58 @@ fun ChatViewContent(
                                 imageVector = Icons.Default.MoreVert,
                                 contentDescription = "More",
                                 tint = DashboardNavMuted
+                            )
+                        }
+                    }
+
+                    // Chat-Features — In-conversation search overlay. Renders an
+                    // OutlinedTextField pinned under the top bar (above the
+                    // screenshot-protection strip) when `showConversationSearch`
+                    // is true. The text input updates `searchQuery`, which the
+                    // existing derivedStateOf filters conversationMessages by.
+                    if (showConversationSearch) {
+                        Surface(
+                            color = DashboardCard,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                placeholder = { Text("Search messages...", fontSize = 13.sp, color = DashboardNavMuted) },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Default.Search,
+                                        contentDescription = null,
+                                        tint = DashboardNavMuted,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
+                                trailingIcon = {
+                                    if (searchQuery.isNotEmpty()) {
+                                        IconButton(onClick = { searchQuery = "" }) {
+                                            Icon(
+                                                imageVector = Icons.Default.Close,
+                                                contentDescription = "Clear search",
+                                                tint = DashboardNavMuted,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = DashboardTerracotta,
+                                    unfocusedBorderColor = Color(0xFF42342D),
+                                    focusedContainerColor = Color(0xFF261E1A),
+                                    unfocusedContainerColor = Color(0xFF261E1A),
+                                    focusedTextColor = DashboardCream,
+                                    unfocusedTextColor = DashboardCream,
+                                    cursorColor = DashboardTerracotta
+                                )
                             )
                         }
                     }
@@ -1319,14 +1505,20 @@ fun ChatViewContent(
                         }
                     }
 
-                    // Chat-Features — Empty-state placeholder. Rendered when the
-                    // real conversation has no messages yet (brand-new match, or
-                    // matchId resolved but getMessages returned []). Replaces the
-                    // canned m1-m7 sample messages that previously populated this
-                    // space. Tapping the placeholder focuses the message input.
+                    // Chat-Features — Empty-state placeholder. Two cases:
+                    //   1. Real empty conversation (no messages at all, search
+                    //      query blank): "Say hi to ${partner}! 👋".
+                    //   2. Search returned no matches (searchQuery non-blank,
+                    //      filtered list empty): "No messages found".
                     if (conversationItems.isEmpty()) {
                         item(key = "empty_state") {
                             val partnerName = activeChatProfile?.name ?: "your match"
+                            val query = searchQuery.trim()
+                            val emptyText = if (query.isNotBlank()) {
+                                "No messages found"
+                            } else {
+                                "Say hi to $partnerName! 👋"
+                            }
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -1334,7 +1526,7 @@ fun ChatViewContent(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = "Say hi to $partnerName! 👋",
+                                    text = emptyText,
                                     color = DashboardMutedBeige,
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Medium,
@@ -1706,10 +1898,12 @@ fun ChatViewContent(
                                             } else if (msg.type == ChatMessageType.VOICE) {
                                                 // Feature #25 — Voice message bubble rendering.
                                                 // Chat-Features — Tapping play creates a MediaPlayer on demand,
-                                                // sets the data source to the message's media_url, prepares
-                                                // async, and starts playback. The play/pause icon flips per-row
-                                                // based on `voicePlaybackId`. A second tap pauses; playback
-                                                // completion clears the state.
+                                                // sets the data source to the message's media_url (decoding
+                                                // data: URIs to a temp file first since MediaPlayer can't
+                                                // stream them directly), prepares async, and starts playback.
+                                                // The play/pause icon flips per-row based on `voicePlaybackId`.
+                                                // A second tap stops + releases the player (per spec) rather
+                                                // than just pausing — playback completion clears the state.
                                                 val isThisPlaying = voicePlaybackId == msg.id
                                                 Row(
                                                     verticalAlignment = Alignment.CenterVertically,
@@ -1727,34 +1921,66 @@ fun ChatViewContent(
                                                             .clickable {
                                                                 val url = msg.mediaUrl ?: return@clickable
                                                                 if (isThisPlaying) {
-                                                                    // Pause / stop.
-                                                                    voiceMediaPlayer?.let { mp ->
-                                                                        runCatching {
-                                                                            if (mp.isPlaying) mp.pause() else mp.start()
-                                                                        }
-                                                                    }
+                                                                    // Chat-Features — Stop + release MediaPlayer + clear
+                                                                    // state per spec (rather than just pausing).
+                                                                    playbackJob?.cancel()
+                                                                    runCatching { voiceMediaPlayer?.let { it.stop(); it.release() } }
+                                                                    voiceMediaPlayer = null
+                                                                    voicePlaybackId = null
+                                                                    playbackProgress = 0f
                                                                 } else {
                                                                     // Stop any prior playback, then start this one.
+                                                                    playbackJob?.cancel()
                                                                     runCatching { voiceMediaPlayer?.release() }
-                                                                    val mp = android.media.MediaPlayer().apply {
-                                                                        try {
-                                                                            setDataSource(url)
-                                                                            setOnPreparedListener { it.start() }
-                                                                            setOnCompletionListener {
-                                                                                voicePlaybackId = null
-                                                                                runCatching { it.release() }
-                                                                                voiceMediaPlayer = null
+                                                                    val mp = MediaPlayer()
+                                                                    try {
+                                                                        // Chat-Features — Decode data: URIs (base64 audio)
+                                                                        // to a temp file first since MediaPlayer.setDataSource
+                                                                        // can't stream a data: URI directly. Network / file
+                                                                        // URLs pass through unchanged.
+                                                                        val effectiveSource = if (url.startsWith("data:")) {
+                                                                            runCatching {
+                                                                                val commaIdx = url.indexOf(',')
+                                                                                val b64 = if (commaIdx >= 0) url.substring(commaIdx + 1) else ""
+                                                                                val tmp = File(context.cacheDir, "voice_play_${System.currentTimeMillis()}.m4a")
+                                                                                tmp.writeBytes(Base64.decode(b64, Base64.DEFAULT))
+                                                                                tmp.absolutePath
+                                                                            }.getOrNull() ?: url
+                                                                        } else url
+                                                                        mp.setDataSource(effectiveSource)
+                                                                        mp.setOnPreparedListener { player ->
+                                                                            player.start()
+                                                                            // Chat-Features — Poll playback position every
+                                                                            // 100ms to drive the LinearProgressIndicator.
+                                                                            playbackProgress = 0f
+                                                                            playbackJob = chatScope.launch {
+                                                                                while (isActive && voicePlaybackId == msg.id) {
+                                                                                    val pos = runCatching { player.currentPosition.toFloat() }.getOrDefault(0f)
+                                                                                    val dur = runCatching { player.duration.toFloat() }.getOrDefault(0f)
+                                                                                    playbackProgress = if (dur > 0f) (pos / dur).coerceIn(0f, 1f) else 0f
+                                                                                    delay(100L)
+                                                                                }
                                                                             }
-                                                                            setOnErrorListener { mp1, _, _ ->
-                                                                                voicePlaybackId = null
-                                                                                runCatching { mp1.release() }
-                                                                                voiceMediaPlayer = null
-                                                                                true
-                                                                            }
-                                                                            prepareAsync()
-                                                                        } catch (_: Exception) {
-                                                                            runCatching { release() }
                                                                         }
+                                                                        mp.setOnCompletionListener {
+                                                                            voicePlaybackId = null
+                                                                            playbackProgress = 1f
+                                                                            runCatching { it.release() }
+                                                                            voiceMediaPlayer = null
+                                                                            playbackJob?.cancel()
+                                                                        }
+                                                                        mp.setOnErrorListener { mp1, _, _ ->
+                                                                            voicePlaybackId = null
+                                                                            playbackProgress = 0f
+                                                                            runCatching { mp1.release() }
+                                                                            voiceMediaPlayer = null
+                                                                            playbackJob?.cancel()
+                                                                            true
+                                                                        }
+                                                                        mp.prepareAsync()
+                                                                    } catch (_: Exception) {
+                                                                        runCatching { mp.release() }
+                                                                        return@clickable
                                                                     }
                                                                     voiceMediaPlayer = mp
                                                                     voicePlaybackId = msg.id
@@ -1764,33 +1990,51 @@ fun ChatViewContent(
                                                         Box(contentAlignment = Alignment.Center) {
                                                             Icon(
                                                                 imageVector = if (isThisPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                                                contentDescription = if (isThisPlaying) "Pause voice message" else "Play voice message",
+                                                                contentDescription = if (isThisPlaying) "Stop voice message" else "Play voice message",
                                                                 tint = Color.White,
                                                                 modifier = Modifier.size(20.dp)
                                                             )
                                                         }
                                                     }
                                                     Spacer(modifier = Modifier.width(10.dp))
-                                                    // Fake waveform — Row of ~20 thin bars of varying heights.
+                                                    // Chat-Features — Real waveform. Renders bars from the
+                                                    // captured amplitude samples (0..32767). Falls back to a
+                                                    // flat placeholder when the message has no samples (e.g.
+                                                    // received voice messages from the partner that don't
+                                                    // carry waveform data). Bar height is normalised to the
+                                                    // max sample so the loudest bar fills the 18.dp track.
                                                     Row(
                                                         horizontalArrangement = Arrangement.spacedBy(2.dp),
                                                         verticalAlignment = Alignment.CenterVertically,
                                                         modifier = Modifier.weight(1f)
                                                     ) {
-                                                        val heights = listOf(
-                                                            6, 12, 8, 16, 10, 14, 6, 18, 12, 8,
-                                                            14, 6, 16, 10, 12, 8, 6, 14, 10, 6
-                                                        )
-                                                        heights.forEach { h ->
-                                                            Box(
-                                                                modifier = Modifier
-                                                                    .width(2.dp)
-                                                                    .height(h.dp)
-                                                                    .clip(RoundedCornerShape(1.dp))
-                                                                    .background(
-                                                                        if (h > 12) DashboardTerracotta else DashboardPeach
-                                                                    )
-                                                            )
+                                                        val samples = msg.waveformSamples
+                                                        if (samples.isEmpty()) {
+                                                            // Flat placeholder — 18 thin bars of equal height.
+                                                            val placeholder = listOf(8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8)
+                                                            placeholder.forEach { h ->
+                                                                Box(
+                                                                    modifier = Modifier
+                                                                        .width(2.dp)
+                                                                        .height(h.dp)
+                                                                        .clip(RoundedCornerShape(1.dp))
+                                                                        .background(DashboardPeach)
+                                                                )
+                                                            }
+                                                        } else {
+                                                            val maxAmp = (samples.maxOrNull() ?: 1).coerceAtLeast(1)
+                                                            samples.forEach { amp ->
+                                                                val normalised = (amp.toFloat() / maxAmp).coerceIn(0.18f, 1f)
+                                                                Box(
+                                                                    modifier = Modifier
+                                                                        .width(2.dp)
+                                                                        .height((normalised * 18f).dp)
+                                                                        .clip(RoundedCornerShape(1.dp))
+                                                                        .background(
+                                                                            if (normalised > 0.66f) DashboardTerracotta else DashboardPeach
+                                                                        )
+                                                                )
+                                                            }
                                                         }
                                                     }
                                                     Spacer(modifier = Modifier.width(8.dp))
@@ -1798,6 +2042,20 @@ fun ChatViewContent(
                                                         text = msg.audioDuration ?: "0:00",
                                                         fontSize = 12.sp,
                                                         color = DashboardMutedBeige
+                                                    )
+                                                }
+                                                // Chat-Features — LinearProgressIndicator for playback
+                                                // progress, shown only while this row is the active player.
+                                                if (isThisPlaying) {
+                                                    Spacer(modifier = Modifier.height(4.dp))
+                                                    LinearProgressIndicator(
+                                                        progress = { playbackProgress },
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .height(2.dp)
+                                                            .clip(RoundedCornerShape(50)),
+                                                        color = DashboardTerracotta,
+                                                        trackColor = DashboardNavMuted.copy(alpha = 0.4f)
                                                     )
                                                 }
                                                 Spacer(modifier = Modifier.height(6.dp))
@@ -1872,6 +2130,17 @@ fun ChatViewContent(
                                                 modifier = Modifier.align(Alignment.End),
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
+                                                // Chat-Features — "edited" label rendered when the
+                                                // message has been patched (SupabaseRepository.editMessage).
+                                                if (msg.isEdited) {
+                                                    Text(
+                                                        text = "edited",
+                                                        color = if (isSender) Color.White.copy(alpha = 0.7f) else DashboardNavMuted,
+                                                        fontSize = 10.sp,
+                                                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                                                    )
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                }
                                                 Text(
                                                     text = msg.timestamp,
                                                     color = if (isSender) Color.White.copy(alpha = 0.7f) else DashboardNavMuted,
@@ -2185,7 +2454,10 @@ fun ChatViewContent(
                                     // public URL as `media_url` on the message row.
                                     val secs = voiceRecordSeconds.coerceAtLeast(1)
                                     val audioDuration = "0:${secs.toString().padStart(2, '0')}"
-                                    val audioBytes = stopVoiceRecording()
+                                    // Chat-Features — stopVoiceRecording now returns
+                                    // Pair<ByteArray?, List<Int>> (audio bytes + real
+                                    // waveform samples captured during recording).
+                                    val (audioBytes, capturedWaveform) = stopVoiceRecording()
                                     if (audioBytes == null || audioBytes.isEmpty()) {
                                         Toast.makeText(
                                             context,
@@ -2200,6 +2472,8 @@ fun ChatViewContent(
                                     // fallback so the user sees the voice bubble immediately even
                                     // if Storage upload later fails (per Batch-6 spec). On a
                                     // successful upload we upgrade `mediaUrl` to the public URL.
+                                    // The captured waveform samples are attached so the bubble
+                                    // renders the real waveform (not a hardcoded one).
                                     val b64 = Base64.encodeToString(audioBytes, Base64.NO_WRAP)
                                     val fallbackMediaUrl = "data:audio/mp4;base64,$b64"
                                     conversationMessages.add(
@@ -2211,6 +2485,7 @@ fun ChatViewContent(
                                             type = ChatMessageType.VOICE,
                                             mediaUrl = fallbackMediaUrl,
                                             audioDuration = audioDuration,
+                                            waveformSamples = capturedWaveform,
                                             isRead = false,
                                             isSending = true
                                         )
@@ -2337,19 +2612,22 @@ fun ChatViewContent(
                                 onValueChange = {
                                     chatMessageInput = it
                                     // Chat-Features — Typing broadcast. Throttle to one event per
-                                    // 1.5s so we don't spam the channel on every keystroke.
+                                    // 2s so we don't spam the channel on every keystroke. Per
+                                    // spec the wire format is `{"event":"typing","payload":
+                                    // {"user_id":"$uid","is_typing":true}}` — a top-level
+                                    // `typing` event the partner's onMessage handler matches.
                                     val now = System.currentTimeMillis()
-                                    if (it.isNotBlank() && now - lastTypingBroadcastMs > 1500L) {
+                                    if (it.isNotBlank() && now - lastTypingBroadcastMs > 2_000L) {
                                         lastTypingBroadcastMs = now
                                         runCatching {
                                             typingSocketRef.get()?.let { socket ->
                                                 val typingPayload = JSONObject().apply {
-                                                    put("type", "typing")
                                                     put("user_id", SessionManager.current()?.userId ?: "")
+                                                    put("is_typing", true)
                                                 }
                                                 val typingMsg = JSONObject().apply {
                                                     put("topic", "realtime:public:messages:match_id=eq.${activeMatchId ?: ""}")
-                                                    put("event", "broadcast")
+                                                    put("event", "typing")
                                                     put("payload", typingPayload)
                                                     put("ref", "typing_${now}")
                                                 }
@@ -3239,7 +3517,12 @@ fun ChatViewContent(
                                 if (ok) {
                                     val idx = conversationMessages.indexOfFirst { it.id == localId }
                                     if (idx >= 0) {
-                                        conversationMessages[idx] = conversationMessages[idx].copy(text = newText)
+                                        // Chat-Features — Set isEdited = true so the
+                                        // "edited" label renders next to the timestamp.
+                                        conversationMessages[idx] = conversationMessages[idx].copy(
+                                            text = newText,
+                                            isEdited = true
+                                        )
                                     }
                                 } else {
                                     Toast.makeText(context, "Couldn't save edit", Toast.LENGTH_SHORT).show()
