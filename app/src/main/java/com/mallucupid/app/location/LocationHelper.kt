@@ -120,6 +120,10 @@ object LocationHelper {
      * One-shot high-accuracy fix. Returns null on ANY failure (no fix within
      * [FIX_TIMEOUT_MS], no permission, provider error) — the caller decides what
      * message to show. Never throws.
+     *
+     * If `getCurrentLocation()` cannot acquire a fresh fix in time, we fall back
+     * to `lastLocation` so we can still populate the city from the most recent
+     * cached position (better than showing "Unknown").
      */
     suspend fun getCurrentLocation(context: Context): LocationResult? {
         if (!hasLocationPermission(context)) return null
@@ -138,6 +142,20 @@ object LocationHelper {
                     cont.invokeOnCancellation { cts.cancel() }
                 }
             } catch (e: SecurityException) {
+                null
+            }
+        } ?: run {
+            // Fresh fix failed — try the cached last location before giving up.
+            try {
+                withTimeoutOrNull(2_000L) {
+                    suspendCancellableCoroutine<Location?> { cont ->
+                        fusedClient.lastLocation
+                            .addOnSuccessListener { loc -> cont.resume(loc) }
+                            .addOnFailureListener { cont.resume(null) }
+                            .addOnCanceledListener { cont.resume(null) }
+                    }
+                }
+            } catch (_: SecurityException) {
                 null
             }
         } ?: return null

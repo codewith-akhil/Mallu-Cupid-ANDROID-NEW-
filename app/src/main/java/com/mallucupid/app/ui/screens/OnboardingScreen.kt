@@ -350,8 +350,8 @@ private fun OnboardingStepBody(
         2 -> Step3Location(
             city = draft.city,
             onCityChange = { city, lat, lng -> onDraftChange(draft.copy(city = city, latitude = lat, longitude = lng)) },
-            distance = draft.distance,
-            onDistanceChange = { onDraftChange(draft.copy(distance = it)) },
+            distance = draft.maxDistanceKm,
+            onDistanceChange = { onDraftChange(draft.copy(maxDistanceKm = it)) },
             onCountryDetected = { countryName, isoCode, minAge ->
                 onDraftChange(draft.copy(country = countryName, countryIsoCode = isoCode, countryMinAge = minAge))
             }
@@ -837,6 +837,41 @@ private fun Step2Birthday(
     onYearChange: (String) -> Unit,
     age: Int
 ) {
+    // Birthday field validation. We coerce inputs as the user types so the
+    // value never goes out of the legal range:
+    //   day   1..31
+    //   month 1..12
+    //   year  1925..current year
+    val currentYear = java.time.LocalDate.now().year
+    val dayNum = day.toIntOrNull()
+    val monthNum = month.toIntOrNull()
+    val yearNum = year.toIntOrNull()
+    val dayError = dayNum != null && (dayNum < 1 || dayNum > 31)
+    val monthError = monthNum != null && (monthNum < 1 || monthNum > 12)
+    val yearError = yearNum != null && (yearNum < 1925 || yearNum > currentYear)
+    fun sanitizeDay(input: String) {
+        if (input.length > 2 || !input.all { c -> c.isDigit() }) return
+        // Block leading zeros like "00" / "07" — keep "0" as a transient empty state.
+        val n = input.toIntOrNull()
+        if (n != null && n > 31) return
+        onDayChange(input)
+    }
+    fun sanitizeMonth(input: String) {
+        if (input.length > 2 || !input.all { c -> c.isDigit() }) return
+        val n = input.toIntOrNull()
+        if (n != null && n > 12) return
+        onMonthChange(input)
+    }
+    fun sanitizeYear(input: String) {
+        if (input.length > 4 || !input.all { c -> c.isDigit() }) return
+        // Block typing past the current year prefix.
+        if (input.length == 4) {
+            val n = input.toInt()
+            if (n < 1925 || n > currentYear) return
+        }
+        onYearChange(input)
+    }
+
     Column {
         Text(
             text = "When's your birthday?",
@@ -867,8 +902,9 @@ private fun Step2Birthday(
         ) {
             OutlinedTextField(
                 value = day,
-                onValueChange = { if (it.length <= 2 && it.all { c -> c.isDigit() }) onDayChange(it) },
+                onValueChange = { sanitizeDay(it) },
                 placeholder = { Text("DD", color = Color.Gray, textAlign = TextAlign.Center) },
+                isError = dayError,
                 modifier = Modifier.weight(1f),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -886,8 +922,9 @@ private fun Step2Birthday(
 
             OutlinedTextField(
                 value = month,
-                onValueChange = { if (it.length <= 2 && it.all { c -> c.isDigit() }) onMonthChange(it) },
+                onValueChange = { sanitizeMonth(it) },
                 placeholder = { Text("MM", color = Color.Gray, textAlign = TextAlign.Center) },
+                isError = monthError,
                 modifier = Modifier.weight(1f),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -905,8 +942,9 @@ private fun Step2Birthday(
 
             OutlinedTextField(
                 value = year,
-                onValueChange = { if (it.length <= 4 && it.all { c -> c.isDigit() }) onYearChange(it) },
+                onValueChange = { sanitizeYear(it) },
                 placeholder = { Text("YYYY", color = Color.Gray, textAlign = TextAlign.Center) },
+                isError = yearError,
                 modifier = Modifier.weight(1.4f),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -923,7 +961,20 @@ private fun Step2Birthday(
             )
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(8.dp))
+        if (dayError || monthError || yearError) {
+            Text(
+                text = when {
+                    yearError -> "Enter a year between 1925 and $currentYear."
+                    monthError -> "Month must be between 1 and 12."
+                    else -> "Day must be between 1 and 31."
+                },
+                color = AccentPink,
+                fontSize = 12.sp,
+                lineHeight = 16.sp
+            )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
         if (year.length == 4) {
             Surface(
                 shape = RoundedCornerShape(50),
@@ -957,31 +1008,57 @@ private fun Step3Location(
     val coroutineScope = rememberCoroutineScope()
     var isLocating by remember { mutableStateOf(false) }
     var locationError by remember { mutableStateOf<String?>(null) }
+    var pendingGpsDialog by remember { mutableStateOf<android.app.PendingIntent?>(null) }
+
+    // userEditedCity — once the user types anything into the city field, we must
+    // NOT overwrite it with an automated GPS fetch result (that was the bug: type
+    // "Lon" → tap GPS → fetch returns "London, UK" → field becomes "London, UK"
+    // and "Lon" is lost; worse, on every recompose an in-flight fetch would clobber
+    // the user's typing). Remember the latest callbacks so the suspend lambda below
+    // always sees the current ones even across recompositions.
+    var userEditedCity by remember { mutableStateOf(false) }
+    val cityRef = rememberUpdatedState(city)
+    val onCityChangeRef = rememberUpdatedState(onCityChange)
+    val onCountryDetectedRef = rememberUpdatedState(onCountryDetected)
 
     fun fetchDeviceLocation() {
         isLocating = true
         locationError = null
         coroutineScope.launch {
-            // Check if GPS is enabled
-            if (!LocationHelper.isGpsEnabled(context)) {
-                isLocating = false
-                locationError = "GPS is turned off. Please enable location in your phone settings."
-                LocationHelper.openLocationSettings(context)
-                return@launch
+            // First, ask the system whether GPS is actually usable right now. If it
+            // is OFF, this returns a resolvable PendingIntent that, when launched,
+            // shows the system "Turn on device location?" dialog.
+            val gps = LocationHelper.checkGpsSettings(context)
+            when (gps) {
+                is GpsCheck.Resolvable -> {
+                    isLocating = false
+                    pendingGpsDialog = gps.pendingIntent
+                    return@launch
+                }
+                GpsCheck.Unresolvable -> {
+                    isLocating = false
+                    locationError = "GPS is unavailable. Please enable location in your phone settings."
+                    LocationHelper.openLocationSettings(context)
+                    return@launch
+                }
+                GpsCheck.Enabled -> { /* proceed */ }
             }
-            
+
             val loc = LocationHelper.getCurrentLocation(context)
             isLocating = false
             if (loc != null) {
-                onCityChange(loc.fullLocation, loc.latitude, loc.longitude)
+                // Single combined write — city + lat + lng in one update so we don't
+                // emit two recompositions / partial state.
+                onCityChangeRef.value(loc.fullLocation, loc.latitude, loc.longitude)
                 locationError = null
                 if (loc.countryCode.isNotBlank()) {
                     val minAge = SupabaseRepository.getMinAgeForCountry(loc.countryCode)
-                    onCountryDetected(loc.countryName, loc.countryCode, minAge)
+                    onCountryDetectedRef.value(loc.countryName, loc.countryCode, minAge)
                 }
             } else {
                 locationError = "Could not get your location. Please type your city manually."
-                onCityChange("", null, null)
+                // Only clear the city if the user hasn't typed anything yet.
+                if (!userEditedCity) onCityChangeRef.value("", null, null)
             }
         }
     }
@@ -999,9 +1076,34 @@ private fun Step3Location(
         }
     }
 
-    // Auto-fetch location on step load if permission already granted
+    val gpsResolutionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        // If the user accepted the system "Turn on location" dialog, kick off the
+        // fetch once more. If they declined, fall back to manual entry.
+        if (result.resultCode == Activity.RESULT_OK) {
+            fetchDeviceLocation()
+        } else {
+            locationError = "Location is off. Please type your city manually or enable GPS."
+        }
+    }
+
+    // Launch the pending GPS dialog when set.
+    LaunchedEffect(pendingGpsDialog) {
+        val intent = pendingGpsDialog ?: return@LaunchedEffect
+        pendingGpsDialog = null
+        runCatching {
+            gpsResolutionLauncher.launch(IntentSenderRequest.Builder(intent.intentSender).build())
+        }
+    }
+
+    // Auto-fetch location on step load IF AND ONLY IF:
+    //   - the user hasn't typed a city yet (userEditedCity == false), AND
+    //   - we don't already have a city in the draft (city is blank), AND
+    //   - the permission is already granted.
+    // Otherwise we'd clobber user-typed input and re-prompt on every recompose.
     LaunchedEffect(Unit) {
-        if (LocationHelper.hasLocationPermission(context)) {
+        if (!userEditedCity && cityRef.value.isBlank() && LocationHelper.hasLocationPermission(context)) {
             fetchDeviceLocation()
         }
     }
@@ -1053,7 +1155,12 @@ private fun Step3Location(
                 Spacer(modifier = Modifier.width(10.dp))
                 OutlinedTextField(
                     value = city,
-                    onValueChange = { onCityChange(it, null, null) },
+                    onValueChange = {
+                        // Mark the field as user-edited so any in-flight GPS fetch
+                        // will not overwrite it.
+                        userEditedCity = true
+                        onCityChange(it, null, null)
+                    },
                     placeholder = { Text("Enter your city", color = Color.Gray, fontSize = 13.sp) },
                     modifier = Modifier.weight(1f),
                     singleLine = true,
