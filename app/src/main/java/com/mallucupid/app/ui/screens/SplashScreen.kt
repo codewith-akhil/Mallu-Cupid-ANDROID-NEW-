@@ -1,5 +1,6 @@
 ﻿package com.mallucupid.app.ui.screens
 
+import com.mallucupid.app.R
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -54,7 +55,7 @@ fun SplashScreen(onFinished: () -> Unit) {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             AsyncImage(
-                model = "https://res.cloudinary.com/wxytzoo1/image/upload/v1788918988/Mallucupidlogo.png",
+                model = R.drawable.mallucupid_logo,
                 contentDescription = "Mallu Cupid Logo",
                 modifier = Modifier
                     .size(140.dp)

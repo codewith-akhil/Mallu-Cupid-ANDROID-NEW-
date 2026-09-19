@@ -61,7 +61,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.mallucupid.app.data.OnboardingDraft
-import com.mallucupid.app.data.SampleProfiles
 import com.mallucupid.app.data.remote.SupabaseRepository
 import com.mallucupid.app.location.GpsCheck
 import com.mallucupid.app.location.LocationHelper
@@ -107,7 +106,6 @@ fun OnboardingScreen(
     var isSaving by remember { mutableStateOf(false) }
 
     val scrollState = rememberScrollState()
-    val previewScrollState = rememberScrollState()
 
     // Smooth animated progress
     val animatedProgress by animateFloatAsState(
@@ -444,172 +442,6 @@ private fun OnboardingStepBody(
  * DashboardPeach / DashboardNavMuted / TinderGreen (online dot) / TinderGold (primary star).
  */
 @OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun LiveProfilePreviewCard(draft: OnboardingDraft) {
-    Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = DashboardCard,
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-        ) {
-            // Header label — "LIVE PREVIEW" with a tiny online-style dot
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(TinderGreen)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "LIVE PREVIEW",
-                    color = DashboardNavMuted,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp
-                )
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Photo + name/age row
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                val firstPhoto = draft.photos.firstOrNull()
-                Box(
-                    modifier = Modifier
-                        .size(80.dp)
-                        .clip(CircleShape)
-                        .border(2.dp, DashboardTerracotta, CircleShape)
-                        .background(Color.White.copy(alpha = 0.08f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (firstPhoto != null) {
-                        AsyncImage(
-                            model = firstPhoto,
-                            contentDescription = "Profile photo preview",
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Default.Person,
-                            contentDescription = null,
-                            tint = DashboardNavMuted,
-                            modifier = Modifier.size(34.dp)
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = if (draft.name.isNotBlank()) draft.name else "Your name",
-                        color = DashboardCream,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(modifier = Modifier.height(3.dp))
-                    val locationLabel = draft.city.takeIf { it.isNotBlank() }?.let { formatPreviewLocation(it) }
-                    val meta = buildString {
-                        append(draft.calculatedAge)
-                        if (locationLabel != null) append(" · $locationLabel")
-                    }
-                    Text(
-                        text = meta,
-                        color = DashboardMutedBeige,
-                        fontSize = 12.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Bio preview (1-2 lines)
-            Text(
-                text = draft.bio.takeIf { it.isNotBlank() }
-                    ?: "Your bio will appear here.",
-                color = DashboardMutedBeige,
-                fontSize = 12.sp,
-                lineHeight = 17.sp,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-
-            // Up to 4 interest chips (wrapping FlowRow)
-            if (draft.interests.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(12.dp))
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    draft.interests.take(4).forEach { interest ->
-                        Surface(
-                            shape = RoundedCornerShape(50),
-                            color = DashboardTerracotta.copy(alpha = 0.18f),
-                            border = BorderStroke(1.dp, DashboardTerracotta.copy(alpha = 0.5f))
-                        ) {
-                            Text(
-                                text = interest,
-                                color = DashboardCream,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Medium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
-                }
-            }
-
-            // First prompt Q+A (only if answered)
-            val firstPrompt = draft.prompts.firstOrNull()?.takeIf { it.answer.isNotBlank() }
-            if (firstPrompt != null) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = Color.White.copy(alpha = 0.04f)
-                ) {
-                    Column(modifier = Modifier.padding(10.dp)) {
-                        Text(
-                            text = firstPrompt.question,
-                            color = DashboardPeach,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = firstPrompt.answer,
-                            color = DashboardMutedBeige,
-                            fontSize = 11.sp,
-                            lineHeight = 15.sp,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * Shortens a long "City, State, Country" string to just the leading locality for the preview meta.
- */
-private fun formatPreviewLocation(rawCity: String): String? {
-    if (rawCity.isBlank()) return null
-    val first = rawCity.substringBefore(",").trim()
-    return first.ifBlank { null }
-}
 
 // -------------------------------------------------------------
 // STEP 1: GENDER & WHO TO MEET (DROPDOWN SELECTIONS)

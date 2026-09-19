@@ -1,4 +1,5 @@
 package com.mallucupid.app.ui.screens
+import com.mallucupid.app.R
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -50,7 +51,7 @@ fun WelcomeScreen(
             verticalArrangement = Arrangement.Center
         ) {
             AsyncImage(
-                model = "https://res.cloudinary.com/wxytzoo1/image/upload/v1788918988/Mallucupidlogo.png",
+                model = R.drawable.mallucupid_logo,
                 contentDescription = "Mallu Cupid Logo",
                 modifier = Modifier
                     .size(110.dp)

@@ -7,7 +7,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -16,6 +15,8 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -43,6 +44,7 @@ import kotlin.math.abs
 import kotlin.math.hypot
 
 /**
+@OptIn(ExperimentalMaterial3Api::class)
  * Tinder-style Swipeable Card Stack:
  * - Swipe Right: LIKE
  * - Swipe Left: DISLIKE
@@ -52,6 +54,7 @@ import kotlin.math.hypot
  * - Photo switching on tap without gesture interference
  * - Dynamic action buttons (↺ Rewind, ✕ Dislike, ♥ Like) synchronized with gestures
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TinderSwipeableCardStack(
     profiles: List<DatingProfile>,
@@ -79,15 +82,13 @@ fun TinderSwipeableCardStack(
         dragHintShown = true
     }
 
-    // Pull-to-refresh (Feature #11): manual implementation using a vertical-drag
-    // pointerInput on the wrapping Box. Only consumes drags while the stack is
-    // empty so it never interferes with the active card's swipe gestures.
-    // TODO: needs build verification — if PullToRefreshBox from
-    // androidx.compose.material3.pulltorefresh (Material3 1.3+, BOM 2024.09.00)
-    // is available, prefer it over this manual version.
-    var pullDistance by remember { mutableStateOf(0f) }
+    // Feature #11: pull-to-refresh via Material3 PullToRefreshBox. Replaces the
+    // prior hand-rolled detectVerticalDragGestures + manual indicator + the
+    // 650ms fake `delay()` "network refresh" — the box manages its own drag
+    // threshold, indicator, and snap-back animation. `isPullRefreshing` drives
+    // the built-in spinner; we flip it on while `onResetStack()` runs (which is
+    // synchronous, so the spinner only flashes briefly — no artificial delay).
     var isPullRefreshing by remember { mutableStateOf(false) }
-    val pullThreshold = 220f
 
     val totalProfiles = profiles.size
     val activeProfile = if (totalProfiles > 0) profiles[currentIndex % totalProfiles] else null
@@ -160,38 +161,21 @@ fun TinderSwipeableCardStack(
         }
     }
 
-    Box(
+    PullToRefreshBox(
+        isRefreshing = isPullRefreshing,
+        onRefresh = {
+            // Material3 PullToRefreshBox handles drag threshold + indicator.
+            // No fake delay — onResetStack() is synchronous, so the spinner
+            // flashes briefly while the deck resets then auto-hides.
+            isPullRefreshing = true
+            coroutineScope.launch {
+                onResetStack()
+                isPullRefreshing = false
+            }
+        },
         modifier = modifier
             .fillMaxSize()
             .padding(bottom = 72.dp)
-            // Feature #11: pull-to-refresh — only listens to vertical drag while
-            // the stack is empty (no active card to fight with for drag events).
-            .pointerInput(activeProfile == null) {
-                if (activeProfile == null) {
-                    detectVerticalDragGestures(
-                        onDragEnd = {
-                            if (pullDistance > pullThreshold && !isPullRefreshing) {
-                                pullDistance = 0f
-                                isPullRefreshing = true
-                                coroutineScope.launch {
-                                    delay(650) // simulate network refresh
-                                    onResetStack()
-                                    isPullRefreshing = false
-                                }
-                            } else {
-                                pullDistance = 0f
-                            }
-                        },
-                        onDragCancel = { pullDistance = 0f },
-                        onVerticalDrag = { change, dragAmount ->
-                            change.consume()
-                            if (dragAmount > 0f) {
-                                pullDistance = (pullDistance + dragAmount).coerceAtLeast(0f)
-                            }
-                        }
-                    )
-                }
-            }
     ) {
         if (activeProfile == null) {
             // Empty state when stack is exhausted
@@ -553,29 +537,11 @@ fun TinderSwipeableCardStack(
         }
 
         // -------------------------------------------------------------
-        // Feature #11: Pull-to-refresh indicator (top center, below status bar
-        // because this whole Box is already inside the Dashboard's
-        // statusBarsPadding().navigationBarsPadding() container).
+        // Feature #11: Pull-to-refresh indicator is now owned by
+        // PullToRefreshBox (the wrapping container). The prior manual
+        // CircularProgressIndicator + pullAlpha fade was removed along with
+        // the detectVerticalDragGestures hand-rolled implementation.
         // -------------------------------------------------------------
-        val pullAlpha = (pullDistance / pullThreshold).coerceIn(0f, 1f)
-        if (pullAlpha > 0f || isPullRefreshing) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 18.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator(
-                    color = DashboardTerracotta,
-                    strokeWidth = 2.5.dp,
-                    modifier = Modifier
-                        .size(28.dp)
-                        .graphicsLayer {
-                            alpha = if (isPullRefreshing) 1f else pullAlpha
-                        }
-                )
-            }
-        }
 
         // -------------------------------------------------------------
         // Feature #7: First-launch drag-hint overlay (only when a card is
@@ -637,6 +603,7 @@ fun TinderSwipeableCardStack(
 }
 
 /**
+@OptIn(ExperimentalMaterial3Api::class)
  * Reusable visual Card Layer rendering photo, gradients, header, and profile info
  */
 @Composable
@@ -896,21 +863,27 @@ private fun CardLayer(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.clickable { onExpand?.invoke() }
                 ) {
-                    Text(
-                        text = profile.name,
-                        color = DashboardCream,
-                        fontSize = 38.sp,
-                        fontFamily = FontFamily.Serif,
-                        fontWeight = FontWeight.Normal,
-                        letterSpacing = (-1).sp
-                    )
-                    Text(
-                        text = "${profile.age}",
-                        color = DashboardPeach,
-                        fontSize = 32.sp,
-                        fontFamily = FontFamily.Serif,
-                        fontWeight = FontWeight.Normal
-                    )
+                    // Chat-Features — Name only rendered if non-blank.
+                    if (profile.name.isNotBlank()) {
+                        Text(
+                            text = profile.name,
+                            color = DashboardCream,
+                            fontSize = 38.sp,
+                            fontFamily = FontFamily.Serif,
+                            fontWeight = FontWeight.Normal,
+                            letterSpacing = (-1).sp
+                        )
+                    }
+                    // Chat-Features — Age only rendered when > 0.
+                    if (profile.age > 0) {
+                        Text(
+                            text = "${profile.age}",
+                            color = DashboardPeach,
+                            fontSize = 32.sp,
+                            fontFamily = FontFamily.Serif,
+                            fontWeight = FontWeight.Normal
+                        )
+                    }
                     // Feature #8: Verified blue badge — small SuperBlue circle with white check,
                     // placed right after the name/age row. Only shown when profile.isVerified.
                     if (profile.isVerified) {
@@ -1017,6 +990,7 @@ private fun CardLayer(
 }
 
 /**
+@OptIn(ExperimentalMaterial3Api::class)
  * Interactive button with spring bounce and dynamic drag scale factor
  */
 @Composable

@@ -849,7 +849,6 @@ fun ExpandedProfileSheet(
         }
 
         // Block confirmation dialog (child of the existing root — no inset change)
-        // TODO: wire onBlock DB call from DashboardScreen — currently shows Toast + dismisses.
         if (showBlockDialog) {
             AlertDialog(
                 onDismissRequest = {
@@ -874,7 +873,6 @@ fun ExpandedProfileSheet(
                     Button(
                         onClick = {
                             blockLoading = true
-                            // TODO: wire onBlock() DB call — for now simulate with Toast + dismiss.
                             actionToast = "Blocked"
                             showBlockDialog = false
                             blockLoading = false

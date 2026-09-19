@@ -1,4 +1,5 @@
 package com.mallucupid.app.ui.screens
+import com.mallucupid.app.R
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -399,7 +400,7 @@ fun AuthLogo(
     bottomSpacing: Dp = 24.dp
 ) {
     AsyncImage(
-        model = "https://res.cloudinary.com/wxytzoo1/image/upload/v1788918988/Mallucupidlogo.png",
+        model = R.drawable.mallucupid_logo,
         contentDescription = "Logo",
         modifier = Modifier
             .size(size)

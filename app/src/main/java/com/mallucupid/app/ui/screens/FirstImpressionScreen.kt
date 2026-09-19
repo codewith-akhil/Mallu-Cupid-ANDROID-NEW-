@@ -63,7 +63,7 @@ fun FirstImpressionScreen(
 
     val photos = remember(profile.photos) {
         if (profile.photos.isNotEmpty()) profile.photos
-        else listOf("https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=900&q=85")
+        else emptyList()
     }
 
     fun handleNextPhoto() {

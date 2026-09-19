@@ -7,19 +7,25 @@ public.profiles + public.profile_photos + public.profile_prompts so the
 swipe deck is populated for the first real user.
 
 Usage:
-  python3 supabase/seed.py
+  SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... DB_PASSWORD=... \
+  SUPABASE_PROJECT=... POOLER_HOST=... python3 supabase/seed.py
 
-Requires: psycopg2-binary (already installed in this env).
-Reads nothing from the environment — credentials are hard-coded for this
-one-off seeding operation (they match the values in the project's env).
+Requires: psycopg2-binary
+Reads ALL credentials from environment variables — no hard-coded secrets.
 """
-import psycopg2, requests, json, time, sys
+import psycopg2, requests, json, time, sys, os
 
-SUPABASE_URL = "https://zetvumxhtkomajmdxfbx.supabase.co"
-SERVICE_ROLE = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpldHZ1bXhodGtvbWFqbWR4ZmJ4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4OTIxODkxNCwiZXhwIjoyMTA0Nzk0OTE0fQ.rmKwlOX2gTKne-elMsULwJtGc6xX13HFVHLH9LbduzA"
-DB_PASSWORD = 'Gptimagen5"5656'
-PROJECT = 'zetvumxhtkomajmdxfbx'
-POOLER_HOST = 'aws-0-ap-northeast-1.pooler.supabase.com'
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SERVICE_ROLE = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
+PROJECT = os.environ.get("SUPABASE_PROJECT", "")
+POOLER_HOST = os.environ.get("POOLER_HOST", "")
+
+if not all([SUPABASE_URL, SERVICE_ROLE, DB_PASSWORD, PROJECT, POOLER_HOST]):
+    print("ERROR: Missing required environment variables.", file=sys.stderr)
+    print("Required: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, DB_PASSWORD,", file=sys.stderr)
+    print("         SUPABASE_PROJECT, POOLER_HOST", file=sys.stderr)
+    sys.exit(1)
 
 # 8 sample profiles (matches SampleProfiles.list in the Android app).
 SAMPLE_PROFILES = [

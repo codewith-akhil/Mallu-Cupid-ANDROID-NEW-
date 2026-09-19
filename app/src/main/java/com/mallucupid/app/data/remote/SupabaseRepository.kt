@@ -97,11 +97,11 @@ object SupabaseRepository {
      * + `Range: 0-0` headers and reads the total from the `content-range`
      * response header.
      *
-     * TODO(RLS): the current `swipes_self_read` policy only allows reading
-     * rows where `swiper_id = auth.uid()`, so this query returns 0 until
-     * either a `swipes_received_read` policy (or a SECURITY DEFINER RPC)
-     * is added server-side. Wired end-to-end now so the UI works as soon
-     * as the policy lands.
+     * Note: the `swipes_received_read` RLS policy (migration 0011) allows
+     * reading rows where `swiped_id = auth.uid()`.
+     *
+     *
+     *
      */
     suspend fun getLikesReceivedCount(userId: String): Int = withContext(Dispatchers.IO) {
         val req = Request.Builder()
