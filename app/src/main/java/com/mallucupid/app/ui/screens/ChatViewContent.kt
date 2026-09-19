@@ -47,6 +47,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -114,7 +115,12 @@ data class ChatMessageItem(
     // Chat-Wiring — True while the optimistic send is being confirmed by Supabase.
     // Renders a small spinner next to the bubble; flips to false on success or the
     // message is removed on failure.
-    val isSending: Boolean = false
+    val isSending: Boolean = false,
+    // Chat-Features — True when the message has been edited (PATCH /messages?id=eq.{id}).
+    // Renders a small "edited" label under the bubble and is set when the user
+    // confirms the edit dialog (SupabaseRepository.editMessage). Server-driven
+    // messages hydrate this from the `is_edited` column.
+    val isEdited: Boolean = false
 )
 
 data class ChatThreadItem(
@@ -317,11 +323,21 @@ private fun ChatThreadShimmerRow() {
 @Composable
 fun ChatViewContent(
     profiles: List<DatingProfile>,
-    onOpenProfile: (DatingProfile) -> Unit
+    onOpenProfile: (DatingProfile) -> Unit,
+    // Chat-Features — Notifies the host (DashboardScreen) when a fullscreen
+    // conversation opens / closes so it can hide the bottom nav. The callback
+    // is invoked with `true` when activeChatProfile becomes non-null, `false`
+    // when it returns to null.
+    onConversationStateChanged: (Boolean) -> Unit = {}
 ) {
     val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
     var activeChatProfile by remember { mutableStateOf<DatingProfile?>(null) }
+    // Propagate conversation-active state to the host. Wrapped in LaunchedEffect
+    // so we don't trigger recomposition loops / call during composition.
+    LaunchedEffect(activeChatProfile?.id) {
+        onConversationStateChanged(activeChatProfile != null)
+    }
     var chatMessageInput by remember { mutableStateOf("") }
     var showSafetyCenter by remember { mutableStateOf(false) }
     var showMediaPickerSheet by remember { mutableStateOf(false) }
@@ -356,6 +372,22 @@ fun ChatViewContent(
     var chatTrayTab by remember { mutableIntStateOf(0) }
     // Block confirmation dialog state (stores the profile ID to block, or null when dismissed)
     var showBlockConfirm by remember { mutableStateOf<String?>(null) }
+    // Chat-Features — Edit-target message. When non-null, an edit dialog is shown
+    // pre-filled with the message text; on confirm we PATCH /messages?id=eq.{id}
+    // via SupabaseRepository.editMessage(...) and update the local list.
+    var editTarget by remember { mutableStateOf<ChatMessageItem?>(null) }
+    // Chat-Features — Currently playing voice message. Holds the MediaPlayer +
+    // the message id so the play/pause icon flips per-row. Null when nothing is
+    // playing.
+    var voicePlaybackId by remember { mutableStateOf<String?>(null) }
+    var voiceMediaPlayer by remember { mutableStateOf<android.media.MediaPlayer?>(null) }
+    // Chat-Features — Realtime typing broadcast: last wall-clock ms we sent a
+    // `typing` event so we throttle to at most one event every 1.5s.
+    var lastTypingBroadcastMs by remember { mutableLongStateOf(0L) }
+    // Chat-Features — Live reference to the Realtime websocket so the chat
+    // input's onValueChange can broadcast `typing` events. Set by the
+    // WebSocketListener.onOpen() in the DisposableEffect below.
+    val typingSocketRef = remember { java.util.concurrent.atomic.AtomicReference<WebSocket?>(null) }
     // Fix 4 — Real message-requests list. Populated from
     // SupabaseRepository.getLikesReceivedProfiles(uid) on first composition of
     // the chat tray. Replaces the deleted `sampleRequests` hardcoded list.
@@ -370,66 +402,13 @@ fun ChatViewContent(
     // Matches" carousel too). Populated alongside `realThreads`.
     val realMatches = remember { mutableStateListOf<MatchDto>() }
 
-    // Initial message history with mixed text, image, and video
-    val conversationMessages = remember {
-        mutableStateListOf(
-            ChatMessageItem(
-                id = "m1",
-                text = "Hey! Noticed you're also exploring cafes downtown!",
-                isSender = false,
-                timestamp = "Friday 28 Aug, 15:00"
-            ),
-            ChatMessageItem(
-                id = "m2",
-                text = "You know what I like in you 😉",
-                isSender = true,
-                timestamp = "Friday 28 Aug, 15:02"
-            ),
-            ChatMessageItem(
-                id = "m3",
-                text = "What's that? Good morning! ☕",
-                isSender = false,
-                timestamp = "Wednesday 10:15"
-            ),
-            ChatMessageItem(
-                id = "m4",
-                text = "Your genuine smile and love for sunset views!",
-                isSender = true,
-                timestamp = "Wednesday 10:20"
-            ),
-            ChatMessageItem(
-                id = "m5",
-                text = "Check out this sunset view from the coast yesterday evening 🌅",
-                isSender = false,
-                timestamp = "Wednesday 12:03",
-                type = ChatMessageType.IMAGE,
-                mediaUrl = "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=800&q=80"
-            ),
-            ChatMessageItem(
-                id = "m6",
-                text = "Took a short clip at the lake district during our boat cruise! 🚤",
-                isSender = true,
-                timestamp = "Wednesday 12:05",
-                type = ChatMessageType.VIDEO,
-                mediaUrl = "https://images.unsplash.com/photo-1602216056096-3b40cc0c9944?auto=format&fit=crop&w=800&q=80",
-                videoDuration = "0:18"
-            ),
-            ChatMessageItem(
-                id = "m7",
-                text = "Smile, thanks! That looks so serene 😍",
-                isSender = false,
-                timestamp = "Wednesday 17:01"
-            )
-        )
-    }
-
-    // Chat-Wiring — Snapshot of the hardcoded sample messages used as a dev
-    // fallback when Supabase returns no real messages for a match (or the call
-    // fails). We snapshot once so re-opening the same conversation always
-    // restores the same canned thread instead of an empty list.
-    val sampleMessagesFallback = remember {
-        conversationMessages.toList()
-    }
+    // Chat-Features — Conversation message list. Starts EMPTY (no canned
+    // sample messages — those leaked Unsplash URLs and fake partner dialogue
+    // into real conversations when the user had no match row or a network
+    // hiccup). Real messages are loaded from Supabase by the LaunchedEffect
+    // below; while empty we render an "Say hi to ${partner.name}! 👋" empty
+    // state instead of fabricated chat history.
+    val conversationMessages = remember { mutableStateListOf<ChatMessageItem>() }
 
     // Chat-Wiring — Conversation-level loading state. True while we are resolving
     // the matchId and fetching real messages from Supabase. Renders a centered
@@ -510,20 +489,22 @@ fun ChatViewContent(
     }
 
     // Chat-Wiring — Whenever the open partner changes, resolve the matchId for
-    // (current_user, partner) and load the real message history. Falls back to
-    // the canned sample messages only when no match row exists (dev mode) — when
-    // a real matchId resolves, the conversation list reflects the real DB
-    // history (which may legitimately be empty for a brand-new match).
+    // (current_user, partner) and load the real message history. When a
+    // matchId resolves, the conversation list reflects the real DB history
+    // (which may legitimately be empty for a brand-new match — the empty-state
+    // UI then prompts the user to send the first message). When no matchId
+    // resolves (no match row) or there's no session, the list stays empty
+    // rather than injecting canned sample messages.
     LaunchedEffect(activeChatProfile?.id) {
         val partner = activeChatProfile ?: return@LaunchedEffect
         conversationLoading = true
         val uid = SessionManager.current()?.userId
         if (uid == null) {
-            // No session — keep the existing sample messages and just dismiss
-            // the spinner so the conversation is usable offline.
+            // No session — leave the conversation empty (no canned fallback).
+            // The empty-state UI ("Say hi to ${partner.name}! 👋") renders in
+            // place of fabricated chat history.
             activeMatchId = null
             conversationMessages.clear()
-            conversationMessages.addAll(sampleMessagesFallback)
             conversationLoading = false
             return@LaunchedEffect
         }
@@ -532,9 +513,9 @@ fun ChatViewContent(
         }.getOrNull()
         activeMatchId = matchId
         if (matchId == null) {
-            // No match row — fall back to the canned sample conversation.
+            // No match row — leave the conversation empty. The empty-state UI
+            // prompts the user to send the first message; no canned injection.
             conversationMessages.clear()
-            conversationMessages.addAll(sampleMessagesFallback)
             conversationLoading = false
             return@LaunchedEffect
         }
@@ -568,7 +549,7 @@ fun ChatViewContent(
             val msgType = if (isVideo) ChatMessageType.VIDEO else ChatMessageType.IMAGE
             val tempId = "msg_${System.currentTimeMillis()}"
             // Optimistic insert — isSending=true so a small spinner shows next to
-            // the bubble while Supabase confirms the insert.
+            // the bubble while Supabase confirms the insert + Storage upload.
             conversationMessages.add(
                 ChatMessageItem(
                     id = tempId,
@@ -585,14 +566,30 @@ fun ChatViewContent(
             )
             Toast.makeText(context, if (isVideo) "Video sent securely" else "Photo sent securely", Toast.LENGTH_SHORT).show()
 
-            // Chat-Wiring — Persist to Supabase. Local content:// Uri is stored
-            // as-is for now; a storage-upload pipeline (Supabase Storage) would
-            // replace this with a public URL in a follow-up.
+            // Chat-Wiring — Upload the picked media to Supabase Storage (chat-media
+            // bucket) BEFORE persisting the message row, then store the resulting
+            // public URL as media_url. On upload failure: remove the optimistic
+            // row + toast the user (per Batch-6 spec) — we don't leave a broken
+            // content:// URI in the DB that the partner couldn't render anyway.
             val matchId = activeMatchId
             val uid = SessionManager.current()?.userId
             val partnerProfile = activeChatProfile
             if (matchId != null && uid != null && partnerProfile != null) {
                 chatScope.launch {
+                    val uploadedUrl = runCatching {
+                        SupabaseRepository.uploadChatMedia(uid, uri, isVideo)
+                    }.getOrNull()
+                    if (uploadedUrl == null) {
+                        // Upload failed — pull the optimistic row out and toast.
+                        val idx = conversationMessages.indexOfFirst { it.id == tempId }
+                        if (idx >= 0) conversationMessages.removeAt(idx)
+                        Toast.makeText(
+                            context,
+                            if (isVideo) "Couldn't upload video — please try again" else "Couldn't upload photo — please try again",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        return@launch
+                    }
                     val sent = runCatching {
                         SupabaseRepository.sendMessage(
                             matchId = matchId,
@@ -600,7 +597,7 @@ fun ChatViewContent(
                             receiverId = partnerProfile.id,
                             content = if (isVideo) "Shared a video clip 🎥" else "Shared a photo 📷",
                             type = msgType.toSupabaseType(),
-                            mediaUrl = uri.toString(),
+                            mediaUrl = uploadedUrl,
                             audioDuration = if (isVideo) "0:15" else null,
                             replyToId = null
                         )
@@ -610,7 +607,8 @@ fun ChatViewContent(
                     if (sent != null) {
                         conversationMessages[idx] = conversationMessages[idx].copy(
                             isSending = false,
-                            serverId = sent.id
+                            serverId = sent.id,
+                            mediaUrl = uploadedUrl
                         )
                     } else {
                         conversationMessages.removeAt(idx)
@@ -746,11 +744,20 @@ fun ChatViewContent(
 
     // Feature #21 — Group consecutive messages by day. Re-derives whenever the underlying
     // observable list changes (add / remove / item replace, e.g. read-receipt toggle).
+    // Chat-Features — Search filter: when `searchQuery` is non-blank, only messages
+    // whose text contains the (case-insensitive) query are shown; day separators are
+    // collapsed so we don't render empty "Friday" pills with no matching messages.
     val conversationItems by remember {
         derivedStateOf {
             val result = mutableListOf<ConversationListItem>()
             var lastDay = ""
-            for (msg in conversationMessages) {
+            val query = searchQuery.trim()
+            val visibleMessages = if (query.isBlank()) {
+                conversationMessages
+            } else {
+                conversationMessages.filter { it.text.contains(query, ignoreCase = true) }
+            }
+            for (msg in visibleMessages) {
                 val day = dayLabelFromTimestamp(msg.timestamp)
                 if (day.isNotEmpty() && day != lastDay) {
                     result.add(
@@ -806,6 +813,23 @@ fun ChatViewContent(
         // Feature #23 — ID of the message whose reaction popover is currently open (null = none).
         var showReactionPickerFor by remember { mutableStateOf<String?>(null) }
 
+        // Fix — BackHandler: when a conversation is open, the hardware/system back
+        // gesture closes the conversation (rather than the whole chat screen) so
+        // the user lands back on the chat tray. Disabled when no conversation is
+        // active so back navigates out of the chat screen entirely. Also handles
+        // dismissing open sheets (media picker, GIF picker, safety center, reaction
+        // popover) before closing the conversation.
+        androidx.activity.compose.BackHandler(enabled = true) {
+            when {
+                showReactionPickerFor != null -> showReactionPickerFor = null
+                showMediaPickerSheet -> showMediaPickerSheet = false
+                showGifPickerSheet -> showGifPickerSheet = false
+                showSafetyCenter -> showSafetyCenter = false
+                previewMediaUrl != null -> previewMediaUrl = null
+                else -> activeChatProfile = null
+            }
+        }
+
         // PERFECT WORKING SCREENSHOT PREVENTION:
         // Set FLAG_SECURE on window when conversation opens, clear it on exit!
         DisposableEffect(Unit) {
@@ -828,6 +852,16 @@ fun ChatViewContent(
         // INSERT / UPDATE event. The websocket is closed in `onDispose` when
         // the conversation exits (or when matchId changes).
         //
+        // Chat-Features — Realtime reconnect: if the websocket closes or fails
+        // (transient network drop, Supabase restart, 60s idle timeout), we
+        // schedule a reconnect attempt with exponential backoff (1s / 2s / 4s
+        // / 8s / 16s, max 5 attempts). Reconnect attempts stop once the
+        // DisposableEffect is disposed (`isDisposed` flag). Normal closures
+        // (code == 1000) do NOT trigger a reconnect — that path is reserved
+        // for `onDispose` (conversation exited). The reconnect runs on a
+        // daemon thread so it never blocks the UI thread and dies with the
+        // process if the app is killed mid-backoff.
+        //
         // Polling fallback: regardless of websocket status, a separate
         // LaunchedEffect below polls `getMessages(matchId)` every 5s while the
         // conversation is open — this ensures messages always arrive even if
@@ -840,11 +874,75 @@ fun ChatViewContent(
                 onDispose { /* nothing to clean up — no websocket was opened */ }
             } else {
                 val topic = "realtime:public:messages:match_id=eq.$matchId"
-                val req = Request.Builder()
-                    .url(buildRealtimeWebSocketUrl())
-                    .build()
+                val isDisposed = java.util.concurrent.atomic.AtomicBoolean(false)
+                val currentWs = java.util.concurrent.atomic.AtomicReference<WebSocket?>(null)
+                val listenerRef = java.util.concurrent.atomic.AtomicReference<WebSocketListener?>()
+                // Reconnect attempt counter — reset to 0 on every successful
+                // onOpen (i.e. once we've re-established the channel).
+                val reconnectAttempts = java.util.concurrent.atomic.AtomicInteger(0)
+
+                // Opens a fresh WebSocket to the Supabase Realtime endpoint,
+                // stashing the new socket into `currentWs` so onDispose can
+                // tear it down. No-op if the DisposableEffect has been disposed.
+                fun connectRealtime() {
+                    if (isDisposed.get()) return
+                    runCatching {
+                        val req = Request.Builder()
+                            .url(buildRealtimeWebSocketUrl())
+                            .build()
+                        val listener = listenerRef.get() ?: return@runCatching
+                        val ws = realtimeHttpClient.newWebSocket(req, listener)
+                        currentWs.set(ws)
+                    }
+                }
+
+                // Schedules a reconnect attempt on a daemon thread with
+                // exponential backoff: 1s, 2s, 4s, 8s, 16s (5 attempts total).
+                // After the 5th attempt fails the socket is left dead — the
+                // polling fallback still keeps the conversation usable. The
+                // attempt counter is reset to 0 on a successful onOpen, so a
+                // healthy socket that later drops starts back at 1s.
+                fun scheduleReconnect() {
+                    val attempt = reconnectAttempts.incrementAndGet()
+                    if (attempt > 5) {
+                        android.util.Log.w(
+                            "ChatRealtime",
+                            "Reconnect attempts exhausted ($attempt); relying on polling fallback"
+                        )
+                        return
+                    }
+                    val delayMs = (1L shl (attempt - 1)) * 1_000L  // 1, 2, 4, 8, 16s
+                    val thread = Thread({
+                        if (isDisposed.get()) return@Thread
+                        try {
+                            Thread.sleep(delayMs)
+                        } catch (_: InterruptedException) {
+                            return@Thread
+                        }
+                        if (isDisposed.get()) return@Thread
+                        android.util.Log.i(
+                            "ChatRealtime",
+                            "Reconnect attempt $attempt after ${delayMs}ms backoff"
+                        )
+                        connectRealtime()
+                    }, "ChatRealtime-Reconnect-$attempt").apply {
+                        isDaemon = true
+                        start()
+                    }
+                }
+
+                // Helper that builds a fresh WebSocketListener. Both the initial
+                // connect and the reconnect path use this so behaviour is identical.
                 val wsListener = object : WebSocketListener() {
                     override fun onOpen(webSocket: WebSocket, response: Response) {
+                        if (isDisposed.get()) {
+                            runCatching { webSocket.close(1000, "disposed") }
+                            return
+                        }
+                        // Reset the backoff counter — we're connected again.
+                        reconnectAttempts.set(0)
+                        // Stash the live websocket so the chat input can broadcast `typing` events.
+                        typingSocketRef.set(webSocket)
                         // Phoenix channels join — sends a `phx_join` event with the
                         // postgres_changes config so Supabase knows to broadcast
                         // INSERT / UPDATE events for the messages table on this channel.
@@ -880,6 +978,14 @@ fun ChatViewContent(
                         try {
                             val root = JSONObject(text)
                             val event = root.optString("event")
+                            // Chat-Features — Typing broadcast. Partner emits a
+                            // `typing` broadcast event; we flip partnerIsTyping to
+                            // true and let it auto-false after 3s of silence (handled
+                            // in a separate LaunchedEffect below).
+                            if (event == "typing") {
+                                partnerIsTyping = true
+                                return
+                            }
                             if (event != "postgres_changes") return
                             val payloadData = root.optJSONObject("payload") ?: return
                             val data = payloadData.optJSONObject("data") ?: return
@@ -923,16 +1029,51 @@ fun ChatViewContent(
                     }
 
                     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                        // Polling fallback covers this — no user-visible action.
+                        // Polling fallback covers message delivery — no user-visible action.
+                        // Chat-Features — schedule a reconnect on transient failures so
+                        // typing broadcast + INSERT events resume once the network is back.
                         android.util.Log.w(
                             "ChatRealtime",
-                            "WebSocket failure: ${t.message ?: "unknown"}"
+                            "WebSocket failure: ${t.message ?: "unknown"} — scheduling reconnect"
                         )
+                        scheduleReconnect()
+                    }
+
+                    override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                        // code == 1000 = normal closure (we did it ourselves in
+                        // onDispose, or the server cleanly terminated). Don't
+                        // reconnect in that case — the conversation is gone.
+                        // Any other code (1006 = abnormal, 1011 = server error,
+                        // etc.) is a transient drop → schedule a reconnect.
+                        if (code == 1000) {
+                            android.util.Log.i(
+                                "ChatRealtime",
+                                "WebSocket closed normally (code 1000): $reason — no reconnect"
+                            )
+                            return
+                        }
+                        android.util.Log.w(
+                            "ChatRealtime",
+                            "WebSocket closed abnormally: $code / $reason — scheduling reconnect"
+                        )
+                        scheduleReconnect()
                     }
                 }
-                val ws = realtimeHttpClient.newWebSocket(req, wsListener)
+                listenerRef.set(wsListener)
+
+                val ws = realtimeHttpClient.newWebSocket(
+                    Request.Builder()
+                        .url(buildRealtimeWebSocketUrl())
+                        .build(),
+                    wsListener
+                )
+                currentWs.set(ws)
 
                 onDispose {
+                    // Mark disposed so any pending reconnect attempt bails out.
+                    isDisposed.set(true)
+                    // Clear the typing broadcast reference so the input handler stops trying.
+                    typingSocketRef.set(null)
                     try {
                         val leaveMsg = JSONObject().apply {
                             put("topic", topic)
@@ -943,6 +1084,10 @@ fun ChatViewContent(
                         ws.send(leaveMsg.toString())
                     } catch (_: Throwable) {}
                     ws.close(1000, "Conversation exited")
+                    // Best-effort release of any voice MediaPlayer if playback was active.
+                    runCatching { voiceMediaPlayer?.release() }
+                    voiceMediaPlayer = null
+                    voicePlaybackId = null
                 }
             }
         }
@@ -1174,6 +1319,31 @@ fun ChatViewContent(
                         }
                     }
 
+                    // Chat-Features — Empty-state placeholder. Rendered when the
+                    // real conversation has no messages yet (brand-new match, or
+                    // matchId resolved but getMessages returned []). Replaces the
+                    // canned m1-m7 sample messages that previously populated this
+                    // space. Tapping the placeholder focuses the message input.
+                    if (conversationItems.isEmpty()) {
+                        item(key = "empty_state") {
+                            val partnerName = activeChatProfile?.name ?: "your match"
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 60.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "Say hi to $partnerName! 👋",
+                                    color = DashboardMutedBeige,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+
                     // Feature #21 — Date separators interleaved with messages.
                     items(conversationItems, key = { it.key }) { item ->
                         if (item.isDateSeparator) {
@@ -1301,6 +1471,75 @@ fun ChatViewContent(
                                                     fontWeight = FontWeight.SemiBold,
                                                     color = DashboardPeach
                                                 )
+                                            }
+                                            // Chat-Features — Edit + Delete actions on own messages
+                                            // (only when the message has a server id; local-only sample
+                                            // messages can't be patched/deleted on the server).
+                                            if (isSender && msg.serverId != null) {
+                                                // Edit (only for text messages — voice/image/video can't be edited inline)
+                                                if (msg.type == ChatMessageType.TEXT) {
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .clip(RoundedCornerShape(50))
+                                                            .clickable {
+                                                                editTarget = msg
+                                                                showReactionPickerFor = null
+                                                            }
+                                                            .padding(horizontal = 8.dp, vertical = 14.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Edit,
+                                                            contentDescription = "Edit",
+                                                            tint = DashboardPeach,
+                                                            modifier = Modifier.size(16.dp)
+                                                        )
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Text(
+                                                            text = "Edit",
+                                                            fontSize = 12.sp,
+                                                            fontWeight = FontWeight.SemiBold,
+                                                            color = DashboardPeach
+                                                        )
+                                                    }
+                                                }
+                                                // Delete — soft-deletes the message row.
+                                                Row(
+                                                    modifier = Modifier
+                                                        .clip(RoundedCornerShape(50))
+                                                        .clickable {
+                                                            val deleteId = msg.serverId
+                                                            val localId = msg.id
+                                                            showReactionPickerFor = null
+                                                            chatScope.launch {
+                                                                val ok = runCatching {
+                                                                    SupabaseRepository.deleteMessage(deleteId!!)
+                                                                }.getOrDefault(false)
+                                                                if (ok) {
+                                                                    val idx = conversationMessages.indexOfFirst { it.id == localId }
+                                                                    if (idx >= 0) conversationMessages.removeAt(idx)
+                                                                } else {
+                                                                    Toast.makeText(context, "Couldn't delete message", Toast.LENGTH_SHORT).show()
+                                                                }
+                                                            }
+                                                        }
+                                                        .padding(horizontal = 8.dp, vertical = 14.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Delete,
+                                                        contentDescription = "Delete",
+                                                        tint = NopeCoral,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Text(
+                                                        text = "Delete",
+                                                        fontSize = 12.sp,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        color = NopeCoral
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -1466,22 +1705,66 @@ fun ChatViewContent(
                                                 Spacer(modifier = Modifier.height(6.dp))
                                             } else if (msg.type == ChatMessageType.VOICE) {
                                                 // Feature #25 — Voice message bubble rendering.
+                                                // Chat-Features — Tapping play creates a MediaPlayer on demand,
+                                                // sets the data source to the message's media_url, prepares
+                                                // async, and starts playback. The play/pause icon flips per-row
+                                                // based on `voicePlaybackId`. A second tap pauses; playback
+                                                // completion clears the state.
+                                                val isThisPlaying = voicePlaybackId == msg.id
                                                 Row(
                                                     verticalAlignment = Alignment.CenterVertically,
                                                     modifier = Modifier
                                                         .fillMaxWidth()
                                                         .padding(vertical = 2.dp)
                                                 ) {
-                                                    // Play button (terracotta circle)
+                                                    // Play button (terracotta circle) — toggles playback.
                                                     Surface(
                                                         shape = CircleShape,
                                                         color = DashboardTerracotta,
-                                                        modifier = Modifier.size(36.dp)
+                                                        modifier = Modifier
+                                                            .size(36.dp)
+                                                            .clip(CircleShape)
+                                                            .clickable {
+                                                                val url = msg.mediaUrl ?: return@clickable
+                                                                if (isThisPlaying) {
+                                                                    // Pause / stop.
+                                                                    voiceMediaPlayer?.let { mp ->
+                                                                        runCatching {
+                                                                            if (mp.isPlaying) mp.pause() else mp.start()
+                                                                        }
+                                                                    }
+                                                                } else {
+                                                                    // Stop any prior playback, then start this one.
+                                                                    runCatching { voiceMediaPlayer?.release() }
+                                                                    val mp = android.media.MediaPlayer().apply {
+                                                                        try {
+                                                                            setDataSource(url)
+                                                                            setOnPreparedListener { it.start() }
+                                                                            setOnCompletionListener {
+                                                                                voicePlaybackId = null
+                                                                                runCatching { it.release() }
+                                                                                voiceMediaPlayer = null
+                                                                            }
+                                                                            setOnErrorListener { mp1, _, _ ->
+                                                                                voicePlaybackId = null
+                                                                                runCatching { mp1.release() }
+                                                                                voiceMediaPlayer = null
+                                                                                true
+                                                                            }
+                                                                            prepareAsync()
+                                                                        } catch (_: Exception) {
+                                                                            runCatching { release() }
+                                                                        }
+                                                                    }
+                                                                    voiceMediaPlayer = mp
+                                                                    voicePlaybackId = msg.id
+                                                                }
+                                                            }
                                                     ) {
                                                         Box(contentAlignment = Alignment.Center) {
                                                             Icon(
-                                                                imageVector = Icons.Default.PlayArrow,
-                                                                contentDescription = "Play voice message",
+                                                                imageVector = if (isThisPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                                                contentDescription = if (isThisPlaying) "Pause voice message" else "Play voice message",
                                                                 tint = Color.White,
                                                                 modifier = Modifier.size(20.dp)
                                                             )
@@ -1521,12 +1804,65 @@ fun ChatViewContent(
                                             }
 
                                             if (msg.text.isNotBlank()) {
-                                                Text(
-                                                    text = msg.text,
-                                                    color = if (isSender) Color.White else DashboardCream,
-                                                    fontSize = 14.sp,
-                                                    lineHeight = 20.sp
+                                                // Chat-Features — Link detection. When the message text contains
+                                                // a URL (http/https/www), render via ClickableText so the user
+                                                // can tap to open it. Otherwise keep the plain Text composable so
+                                                // text selection / styling behaviour is unchanged.
+                                                val urlRegex = Regex(
+                                                    "(https?://[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+" +
+                                                        "|www\\.[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+)"
                                                 )
+                                                val urls = urlRegex.findAll(msg.text).toList()
+                                                if (urls.isEmpty()) {
+                                                    Text(
+                                                        text = msg.text,
+                                                        color = if (isSender) Color.White else DashboardCream,
+                                                        fontSize = 14.sp,
+                                                        lineHeight = 20.sp
+                                                    )
+                                                } else {
+                                                    // Build an AnnotatedString with clickable URL spans.
+                                                    val annotated = androidx.compose.ui.text.AnnotatedString.Builder(msg.text).apply {
+                                                        urls.forEach { match ->
+                                                            addStringAnnotation(
+                                                                tag = "URL",
+                                                                annotation = match.value,
+                                                                start = match.range.first,
+                                                                end = match.range.last + 1
+                                                            )
+                                                            addStyle(
+                                                                style = androidx.compose.ui.text.SpanStyle(
+                                                                    color = TinderBlue,
+                                                                    textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
+                                                                ),
+                                                                start = match.range.first,
+                                                                end = match.range.last + 1
+                                                            )
+                                                        }
+                                                    }.toAnnotatedString()
+                                                    val msgColor = if (isSender) Color.White else DashboardCream
+                                                    androidx.compose.foundation.text.ClickableText(
+                                                        text = annotated,
+                                                        style = androidx.compose.ui.text.TextStyle(
+                                                            color = msgColor,
+                                                            fontSize = 14.sp,
+                                                            lineHeight = 20.sp
+                                                        ),
+                                                        onClick = { offset ->
+                                                            annotated.getStringAnnotations("URL", offset, offset)
+                                                                .firstOrNull()?.let { range ->
+                                                                    val url = if (range.item.startsWith("http")) range.item else "https://${range.item}"
+                                                                    runCatching {
+                                                                        val intent = android.content.Intent(
+                                                                            android.content.Intent.ACTION_VIEW,
+                                                                            android.net.Uri.parse(url)
+                                                                        ).apply { flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK }
+                                                                        context.startActivity(intent)
+                                                                    }
+                                                                }
+                                                        }
+                                                    )
+                                                }
                                             }
 
                                             Spacer(modifier = Modifier.height(4.dp))
@@ -1844,8 +2180,9 @@ fun ChatViewContent(
                             Surface(
                                 enabled = !isSendingMessage,
                                 onClick = {
-                                    // Fix 6 — Stop MediaRecorder → get AAC bytes → base64-encode
-                                    // → set as `media_url` data URI on the message row.
+                                    // Fix 6 — Stop MediaRecorder → upload AAC bytes to Supabase
+                                    // Storage (voice-messages bucket) → store the resulting
+                                    // public URL as `media_url` on the message row.
                                     val secs = voiceRecordSeconds.coerceAtLeast(1)
                                     val audioDuration = "0:${secs.toString().padStart(2, '0')}"
                                     val audioBytes = stopVoiceRecording()
@@ -1857,12 +2194,14 @@ fun ChatViewContent(
                                         ).show()
                                         return@Surface
                                     }
-                                    // TODO: move to Supabase Storage when storage SDK is integrated.
-                                    // For now the audio bytes are embedded as a base64 data URI in
-                                    // the `media_url` column so the partner can play it back.
-                                    val b64 = Base64.encodeToString(audioBytes, Base64.NO_WRAP)
-                                    val mediaUrl = "data:audio/mp4;base64,$b64"
+                                    val uid = SessionManager.current()?.userId
                                     val tempId = "msg_${System.currentTimeMillis()}"
+                                    // Chat-Features — Optimistic insert with a base64 data-URI
+                                    // fallback so the user sees the voice bubble immediately even
+                                    // if Storage upload later fails (per Batch-6 spec). On a
+                                    // successful upload we upgrade `mediaUrl` to the public URL.
+                                    val b64 = Base64.encodeToString(audioBytes, Base64.NO_WRAP)
+                                    val fallbackMediaUrl = "data:audio/mp4;base64,$b64"
                                     conversationMessages.add(
                                         ChatMessageItem(
                                             id = tempId,
@@ -1870,7 +2209,7 @@ fun ChatViewContent(
                                             isSender = true,
                                             timestamp = "Just now",
                                             type = ChatMessageType.VOICE,
-                                            mediaUrl = mediaUrl,
+                                            mediaUrl = fallbackMediaUrl,
                                             audioDuration = audioDuration,
                                             isRead = false,
                                             isSending = true
@@ -1879,19 +2218,27 @@ fun ChatViewContent(
                                     // Fix 7 — One-shot send guard.
                                     isSendingMessage = true
 
-                                    // Chat-Wiring — Persist the voice message row to Supabase.
+                                    // Chat-Wiring — Upload voice message to Storage, then persist row.
                                     val matchId = activeMatchId
-                                    val uid = SessionManager.current()?.userId
-                                    if (matchId != null && uid != null) {
+                                    val partnerProfile = activeChatProfile
+                                    if (matchId != null && uid != null && partnerProfile != null) {
                                         chatScope.launch {
+                                            val uploadedUrl = runCatching {
+                                                SupabaseRepository.uploadVoiceMessage(uid, audioBytes)
+                                            }.getOrNull()
+                                            // On upload failure: keep the base64 fallback mediaUrl
+                                            // (the row will still be persisted so the message thread
+                                            // isn't lost — partner playback may not work, but the
+                                            // duration + timestamp are still visible).
+                                            val finalMediaUrl = uploadedUrl ?: fallbackMediaUrl
                                             val sent = runCatching {
                                                 SupabaseRepository.sendMessage(
                                                     matchId = matchId,
                                                     senderId = uid,
-                                                    receiverId = partner.id,
+                                                    receiverId = partnerProfile.id,
                                                     content = "",
                                                     type = "voice",
-                                                    mediaUrl = mediaUrl,
+                                                    mediaUrl = finalMediaUrl,
                                                     audioDuration = audioDuration,
                                                     replyToId = null
                                                 )
@@ -1904,7 +2251,8 @@ fun ChatViewContent(
                                             if (sent != null) {
                                                 conversationMessages[idx] = conversationMessages[idx].copy(
                                                     isSending = false,
-                                                    serverId = sent.id
+                                                    serverId = sent.id,
+                                                    mediaUrl = finalMediaUrl
                                                 )
                                             } else {
                                                 conversationMessages.removeAt(idx)
@@ -1986,7 +2334,30 @@ fun ChatViewContent(
                             // Message Text Field
                             OutlinedTextField(
                                 value = chatMessageInput,
-                                onValueChange = { chatMessageInput = it },
+                                onValueChange = {
+                                    chatMessageInput = it
+                                    // Chat-Features — Typing broadcast. Throttle to one event per
+                                    // 1.5s so we don't spam the channel on every keystroke.
+                                    val now = System.currentTimeMillis()
+                                    if (it.isNotBlank() && now - lastTypingBroadcastMs > 1500L) {
+                                        lastTypingBroadcastMs = now
+                                        runCatching {
+                                            typingSocketRef.get()?.let { socket ->
+                                                val typingPayload = JSONObject().apply {
+                                                    put("type", "typing")
+                                                    put("user_id", SessionManager.current()?.userId ?: "")
+                                                }
+                                                val typingMsg = JSONObject().apply {
+                                                    put("topic", "realtime:public:messages:match_id=eq.${activeMatchId ?: ""}")
+                                                    put("event", "broadcast")
+                                                    put("payload", typingPayload)
+                                                    put("ref", "typing_${now}")
+                                                }
+                                                socket.send(typingMsg.toString())
+                                            }
+                                        }
+                                    }
+                                },
                                 placeholder = { Text("Message...", fontSize = 14.sp, color = DashboardNavMuted) },
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(22.dp),
@@ -2169,11 +2540,11 @@ fun ChatViewContent(
                             modifier = Modifier.size(24.dp)
                         )
                     }
-                    IconButton(onClick = {
-                        Toast.makeText(context, "Explore Date Night Games!", Toast.LENGTH_SHORT).show()
-                    }) {
-                        Text(text = "🎲", fontSize = 20.sp)
-                    }
+                    // Chat-Features — Dice IconButton stub removed. The previous
+                    // implementation was a Toast-only "Explore Date Night Games!"
+                    // stub with no actual games screen behind it; the emoji dice
+                    // looked like a feature affordance but did nothing. Deleted
+                    // rather than left as a dead button that misleads users.
                 }
             }
 
@@ -2201,7 +2572,11 @@ fun ChatViewContent(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Search ${profiles.size + 28} matches",
+                        // Chat-Features — Real match count instead of the prior
+                        // fake `profiles.size + 28` inflated number. When the
+                        // user has zero matches we surface a softer "Find your
+                        // matches" CTA rather than a misleading count.
+                        text = if (realMatches.isNotEmpty()) "Search ${realMatches.size} matches" else "Find your matches",
                         color = DashboardNavMuted,
                         fontSize = 14.sp
                     )
@@ -2261,78 +2636,88 @@ fun ChatViewContent(
             Spacer(modifier = Modifier.height(14.dp))
 
             if (chatTrayTab == 0) {
-            // New Matches Horizontal Row (Matches Screenshot 4: Rounded square cards with verified badges)
-            Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-                Text(
-                    text = "New Matches",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = DashboardCream
-                )
+            // Chat-Features — Wrap the New Matches carousel in a
+            // `realMatches.isNotEmpty()` guard so the section is hidden entirely
+            // (header + LazyRow + spacer) when the user has no matches yet,
+            // rather than rendering an empty LazyRow that suggests the feature
+            // is broken. The carousel now iterates `realThreads` (matched
+            // partner profiles) instead of the swipe deck `profiles` list —
+            // the prior code showed swiping candidates mislabeled as "matches".
+            if (realMatches.isNotEmpty()) {
+                // New Matches Horizontal Row (Matches Screenshot 4: Rounded square cards with verified badges)
+                Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                    Text(
+                        text = "New Matches",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = DashboardCream
+                    )
 
-                Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    items(profiles) { profile ->
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier
-                                .width(78.dp)
-                                .clickable { activeChatProfile = profile }
-                        ) {
-                            Box(
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        items(realThreads, key = { it.profile.id }) { thread ->
+                            val profile = thread.profile
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
                                 modifier = Modifier
-                                    .size(76.dp)
-                                    .clip(RoundedCornerShape(18.dp))
-                                    .background(Color(0xFF261E1A))
-                                    .border(1.dp, Color(0xFF42342D), RoundedCornerShape(18.dp))
+                                    .width(78.dp)
+                                    .clickable { activeChatProfile = profile }
                             ) {
-                                AsyncImage(
-                                    model = profile.photos.firstOrNull() ?: "",
-                                    contentDescription = profile.name,
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentScale = ContentScale.Crop
-                                )
+                                Box(
+                                    modifier = Modifier
+                                        .size(76.dp)
+                                        .clip(RoundedCornerShape(18.dp))
+                                        .background(Color(0xFF261E1A))
+                                        .border(1.dp, Color(0xFF42342D), RoundedCornerShape(18.dp))
+                                ) {
+                                    AsyncImage(
+                                        model = profile.photos.firstOrNull() ?: "",
+                                        contentDescription = profile.name,
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop
+                                    )
 
-                                if (profile.isVerified) {
-                                    Surface(
-                                        shape = CircleShape,
-                                        color = SuperBlue,
-                                        modifier = Modifier
-                                            .align(Alignment.BottomEnd)
-                                            .padding(4.dp)
-                                            .size(18.dp)
-                                    ) {
-                                        Box(contentAlignment = Alignment.Center) {
-                                            Icon(
-                                                imageVector = Icons.Default.Check,
-                                                contentDescription = "Verified",
-                                                tint = Color.White,
-                                                modifier = Modifier.size(11.dp)
-                                            )
+                                    if (profile.isVerified) {
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = SuperBlue,
+                                            modifier = Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .padding(4.dp)
+                                                .size(18.dp)
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = "Verified",
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(11.dp)
+                                                )
+                                            }
                                         }
                                     }
                                 }
+
+                                Spacer(modifier = Modifier.height(6.dp))
+
+                                Text(
+                                    text = profile.name,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = DashboardCream,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
-
-                            Spacer(modifier = Modifier.height(6.dp))
-
-                            Text(
-                                text = profile.name,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = DashboardCream,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
                         }
                     }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(20.dp))
+            }
 
             // Messages Section (Matches Screenshot 4)
             Column(modifier = Modifier.fillMaxSize()) {
@@ -2713,7 +3098,11 @@ fun ChatViewContent(
                     .padding(horizontal = 20.dp, vertical = 10.dp)
             ) {
                 Text(
-                    text = "Trending Stickers / GIFs",
+                    // Chat-Features — Renamed from "Trending Stickers / GIFs" to
+                    // "Quick replies" so the sheet title matches the canned
+                    // short-message content the sheet actually serves. The prior
+                    // title implied a GIF search experience that was never built.
+                    text = "Quick replies",
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
                     color = DashboardCream
@@ -2804,6 +3193,70 @@ fun ChatViewContent(
                 Spacer(modifier = Modifier.height(24.dp))
             }
         }
+    }
+
+    // =========================================================================
+    // Chat-Features — MESSAGE EDIT DIALOG
+    // Shows a pre-filled text field when `editTarget` is non-null. On confirm
+    // we PATCH /messages?id=eq.{id} via SupabaseRepository.editMessage(...) and
+    // update the local list. On cancel we just clear the target.
+    // =========================================================================
+    editTarget?.let { target ->
+        var editDraft by remember(target.id) { mutableStateOf(target.text) }
+        AlertDialog(
+            onDismissRequest = { editTarget = null },
+            title = { Text("Edit message", color = DashboardCream, fontWeight = FontWeight.Bold) },
+            text = {
+                OutlinedTextField(
+                    value = editDraft,
+                    onValueChange = { editDraft = it },
+                    placeholder = { Text("Edit your message...") },
+                    singleLine = false,
+                    maxLines = 4,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = DashboardCard,
+                        unfocusedContainerColor = DashboardCard,
+                        focusedTextColor = DashboardCream,
+                        unfocusedTextColor = DashboardCream,
+                        focusedBorderColor = DashboardTerracotta,
+                        unfocusedBorderColor = DashboardNavMuted,
+                        cursorColor = DashboardTerracotta
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = editDraft.trim().isNotBlank() && editDraft != target.text,
+                    onClick = {
+                        val serverId = target.serverId
+                        val newText = editDraft.trim()
+                        val localId = target.id
+                        if (serverId != null) {
+                            chatScope.launch {
+                                val ok = runCatching {
+                                    SupabaseRepository.editMessage(serverId, newText)
+                                }.getOrDefault(false)
+                                if (ok) {
+                                    val idx = conversationMessages.indexOfFirst { it.id == localId }
+                                    if (idx >= 0) {
+                                        conversationMessages[idx] = conversationMessages[idx].copy(text = newText)
+                                    }
+                                } else {
+                                    Toast.makeText(context, "Couldn't save edit", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                        editTarget = null
+                    }
+                ) { Text("Save", color = DashboardTerracotta, fontWeight = FontWeight.SemiBold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { editTarget = null }) {
+                    Text("Cancel", color = DashboardNavMuted)
+                }
+            },
+            containerColor = DashboardBg
+        )
     }
 
     // =========================================================================
