@@ -6,6 +6,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -68,6 +69,11 @@ fun DashboardScreen(
     val profiles = remember { mutableStateListOf(*SampleProfiles.list.toTypedArray()) }
     val coroutineScope = rememberCoroutineScope()
     var deckLoading by remember { mutableStateOf(false) }
+    // Chat-Features — Pagination state. Initial deck load fetches limit=50 (was 20)
+    // so the user sees a fuller deck without re-fetching. `isLoadingMore` guards
+    // against duplicate concurrent page loads; auto-load triggers when the user
+    // is within 5 profiles of the deck end.
+    var isLoadingMore by remember { mutableStateOf(false) }
 
     // Create notification channel + request POST_NOTIFICATIONS permission on first launch
     val requestNotifications = rememberNotificationPermissionLauncher { granted ->
@@ -89,7 +95,7 @@ fun DashboardScreen(
         if (session?.userId != null) {
             deckLoading = true
             try {
-                val deck = SupabaseRepository.getSwipeDeck(limit = 20)
+                val deck = SupabaseRepository.getSwipeDeck(limit = 50)
                 if (deck.isNotEmpty()) {
                     profiles.clear()
                     profiles.addAll(deck)
@@ -119,7 +125,41 @@ fun DashboardScreen(
         }
     }
     val haptic = LocalHapticFeedback.current
-    val unreadChatCount = 2 // TODO: replace static demo count with real unread-chats state from ChatViewModel
+    // Chat-Features — Real unread-chat count. Replaces the hardcoded `2` demo
+    // value. Polled every 30s from the `get_unread_message_count` RPC (which
+    // itself enforces auth.uid() on the server so we don't need to send user_id).
+    var unreadChatCount by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        val session = SessionManager.current()
+        if (session?.userId != null) {
+            val uid = session.userId
+            // Initial fetch — immediate.
+            unreadChatCount = runCatching { SupabaseRepository.getUnreadMessageCount(uid) }.getOrDefault(0)
+            // Poll every 30s while the dashboard is alive.
+            while (kotlinx.coroutines.coroutineContext.isActive) {
+                kotlinx.coroutines.delay(30_000L)
+                unreadChatCount = runCatching { SupabaseRepository.getUnreadMessageCount(uid) }.getOrDefault(unreadChatCount)
+            }
+        }
+    }
+    // Chat-Features — Daily swipe quota + Pro status. Drives the "X likes
+    // remaining" pill on the swipe screen. Refreshed whenever the deck reloads.
+    // Initial value of `swipeRemaining` is the default daily limit (20) so the
+    // first like works even before the RPC returns; the RPC may override both
+    // (e.g. the user is Pro → remaining is unlimited).
+    var swipeRemaining by remember { mutableIntStateOf(20) }
+    var isProUser by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        val status = runCatching { SupabaseRepository.getSwipeStatus() }.getOrNull()
+        if (status != null) {
+            swipeRemaining = status.remaining
+            isProUser = status.isPro
+        }
+    }
+    // Chat-Features — True when the chat tab has a fullscreen conversation
+    // open. The bottom nav hides (AnimatedVisibility) while this is true so
+    // the conversation can use the full screen height.
+    var chatConversationOpen by remember { mutableStateOf(false) }
     var currentDraft by remember { mutableStateOf(userDraft) }
     var showEditProfileScreen by remember { mutableStateOf(false) }
     var showAccountSettingsScreen by remember { mutableStateOf(false) }
@@ -150,6 +190,31 @@ fun DashboardScreen(
                 it.location.contains(filter, ignoreCase = true)
             }
             if (filtered.isNotEmpty()) filtered else profiles
+        }
+    }
+
+    // Chat-Features — Pagination. Auto-fetch more profiles when the user is
+    // within 5 cards of the deck end. Guarded by `isLoadingMore` to prevent
+    // duplicate concurrent fetches (e.g. rapid swipes). New profiles are
+    // deduped by id so a profile that appears in both the existing deck and
+    // the next page is not inserted twice.
+    LaunchedEffect(currentProfileIndex, displayProfiles.size) {
+        if (isLoadingMore) return@LaunchedEffect
+        if (displayProfiles.isEmpty()) return@LaunchedEffect
+        if (currentProfileIndex < displayProfiles.size - 5) return@LaunchedEffect
+        val uid = SessionManager.current()?.userId ?: return@LaunchedEffect
+        isLoadingMore = true
+        try {
+            val more = SupabaseRepository.getSwipeDeck(limit = 50)
+            if (more.isNotEmpty()) {
+                val existingIds = profiles.map { it.id }.toHashSet()
+                val fresh = more.filter { it.id !in existingIds }
+                if (fresh.isNotEmpty()) profiles.addAll(fresh)
+            }
+        } catch (_: Exception) {
+            // Silent — pagination is best-effort; user keeps swiping on the existing deck.
+        } finally {
+            isLoadingMore = false
         }
     }
 
@@ -221,6 +286,25 @@ fun DashboardScreen(
             actionToast = null
         }
     }
+
+    // Chat-Features — System back gesture handlers. Each handler is enabled
+    // only when its corresponding overlay/sheet/screen is open, so the back
+    // gesture dismisses the topmost overlay instead of navigating out of the
+    // dashboard. Priority order is source order: the LAST composed (i.e. the
+    // last one in this list) wins when multiple are simultaneously enabled.
+    // The full-screen child composables (EditProfileScreen, AccountSettingsScreen,
+    // FaceVerificationScreen, system-state screens) already wire their own
+    // onBack callbacks to the same state vars, so these BackHandlers cover the
+    // SYSTEM back gesture / predictive-back swipe for them too.
+    BackHandler(enabled = chatConversationOpen) { chatConversationOpen = false }
+    BackHandler(enabled = activeSystemScreen != null) { activeSystemScreen = null }
+    BackHandler(enabled = showFaceVerificationScreen) { showFaceVerificationScreen = false }
+    BackHandler(enabled = showAccountSettingsScreen) { showAccountSettingsScreen = false }
+    BackHandler(enabled = showEditProfileScreen) { showEditProfileScreen = false }
+    BackHandler(enabled = firstImpressionProfile != null) { firstImpressionProfile = null }
+    BackHandler(enabled = expandedProfile != null) { expandedProfile = null }
+    BackHandler(enabled = showMatchModal) { showMatchModal = false }
+    BackHandler(enabled = showFilterSheet) { showFilterSheet = false }
 
     if (showEditProfileScreen) {
         EditProfileScreen(
@@ -350,8 +434,18 @@ fun DashboardScreen(
             onDismiss = { expandedProfile = null },
             onLike = {
                 val p = activeExp
+                // Chat-Features — Daily swipe quota. Non-Pro users are capped at
+                // `swipeRemaining` likes per day; once they hit 0 we surface an
+                // upgrade toast and skip the swipe (no recordSwipe call, no
+                // index advance) so the limit is actually enforced client-side.
+                // Pro users (`isProUser == true`) bypass the check entirely.
+                if (!isProUser && swipeRemaining <= 0) {
+                    actionToast = "Daily limit reached — upgrade to Pro for unlimited swipes"
+                    return@ExpandedProfileSheet
+                }
                 expandedProfile = null
                 actionToast = "Liked ${p.name} ♥"
+                if (!isProUser) swipeRemaining = (swipeRemaining - 1).coerceAtLeast(0)
                 coroutineScope.launch {
                     val uid = SessionManager.current()?.userId ?: return@launch
                     SupabaseRepository.recordSwipe(uid, p.id, "like")
@@ -403,6 +497,20 @@ fun DashboardScreen(
         return
     }
 
+    // Chat-Features — Full-screen loading state while the swipe deck is being
+    // fetched from Supabase. Replaces the previous inline overlay Box so the
+    // user sees the branded pulsing-cupid LoadingStateScreen (same component
+    // used by the system-state screens) instead of a bare spinner. Once the
+    // deck arrives, `deckLoading` flips to false and we fall through to the
+    // main Box below.
+    if (deckLoading) {
+        LoadingStateScreen(
+            message = "Finding singles nearby...",
+            onCancel = null
+        )
+        return
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -410,31 +518,6 @@ fun DashboardScreen(
             .statusBarsPadding()
             .navigationBarsPadding()
     ) {
-        // Deck loading overlay — shown while fetching profiles from Supabase
-        if (deckLoading) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(DashboardBg.copy(alpha = 0.85f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(
-                        color = DashboardTerracotta,
-                        strokeWidth = 3.dp,
-                        modifier = Modifier.size(40.dp)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = "Finding singles nearby...",
-                        color = DashboardPeach,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
-        }
-
         // Main view depending on bottom nav
         when (activeNav) {
             "Swipe" -> {
@@ -445,7 +528,15 @@ fun DashboardScreen(
                     onTabSelected = { activeTab = it },
                     onOpenFilter = { showFilterSheet = true },
                     onLike = { likedProfile ->
+                        // Chat-Features — Daily swipe quota. Same gate as the
+                        // expanded-profile like handler: non-Pro users hit a
+                        // hard cap at swipeRemaining=0; Pro users bypass.
+                        if (!isProUser && swipeRemaining <= 0) {
+                            actionToast = "Daily limit reached — upgrade to Pro for unlimited swipes"
+                            return@TinderSwipeableCardStack
+                        }
                         actionToast = "Liked ${likedProfile.name} ♥"
+                        if (!isProUser) swipeRemaining = (swipeRemaining - 1).coerceAtLeast(0)
                         coroutineScope.launch {
                             val uid = SessionManager.current()?.userId ?: return@launch
                             SupabaseRepository.recordSwipe(uid, likedProfile.id, "like")
@@ -545,7 +636,8 @@ fun DashboardScreen(
                     profiles = profiles,
                     onOpenProfile = { p ->
                         expandedProfile = p
-                    }
+                    },
+                    onConversationStateChanged = { isOpen -> chatConversationOpen = isOpen }
                 )
             }
 
@@ -586,28 +678,41 @@ fun DashboardScreen(
         }
 
         // Bottom Navigation Bar (Swipe, Explore, Likes, Chat, Profile)
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .align(Alignment.BottomCenter),
-            color = DashboardBg,
-            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f))
+        // Chat-Features — Hide the nav bar entirely when a chat conversation is
+        // open so the conversation gets full screen height. AnimatedVisibility
+        // (slide + fade) keeps the existing nav padding rhythm when collapsed.
+        androidx.compose.animation.AnimatedVisibility(
+            visible = !chatConversationOpen,
+            enter = androidx.compose.animation.slideInVertically(
+                animationSpec = androidx.compose.animation.core.tween(220),
+                initialOffsetY = { it }
+            ) + androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.slideOutVertically(
+                animationSpec = androidx.compose.animation.core.tween(180),
+                targetOffsetY = { it }
+            ) + androidx.compose.animation.fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(68.dp)
-                    .padding(horizontal = 8.dp),
-                horizontalArrangement = Arrangement.SpaceAround,
-                verticalAlignment = Alignment.CenterVertically
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = DashboardBg,
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f))
             ) {
-                val navItems = listOf(
-                    NavTabItem("Swipe", "🔥"),
-                    NavTabItem("Explore", "⊞"),
-                    NavTabItem("Likes", "✦"),
-                    NavTabItem("Chat", "💬"),
-                    NavTabItem("Profile", "👤")
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(68.dp)
+                        .padding(horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceAround,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val navItems = listOf(
+                        NavTabItem("Swipe", "🔥"),
+                        NavTabItem("Explore", "⊞"),
+                        NavTabItem("Likes", "✦"),
+                        NavTabItem("Chat", "💬"),
+                        NavTabItem("Profile", "👤")
+                    )
 
                 navItems.forEach { item ->
                     val isActive = activeNav == item.label
@@ -686,6 +791,7 @@ fun DashboardScreen(
                 }
             }
         }
+        }  // end AnimatedVisibility (bottom nav)
 
         // Filter Bottom Sheet
         if (showFilterSheet) {
@@ -727,7 +833,9 @@ fun DashboardScreen(
                             )
                             // Reload the swipe deck with the new filters applied.
                             deckLoading = true
-                            val deck = SupabaseRepository.getSwipeDeck(limit = 20)
+                            isLoadingMore = true
+                            val deck = SupabaseRepository.getSwipeDeck(limit = 50)
+                            isLoadingMore = false
                             if (deck.isNotEmpty()) {
                                 profiles.clear()
                                 profiles.addAll(deck)
@@ -801,92 +909,6 @@ private fun TinderActionButton(
         }
     }
 }
-
-// -------------------------------------------------------------
-// EXPLORE VIEW
-// -------------------------------------------------------------
-@Composable
-private fun ExploreView(onSelectCategory: (String) -> Unit) {
-    val categories = listOf(
-        ExploreCategory("Downtown Nights", "Cocktails, the waterfront & late dinners", "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=600&q=80"),
-        ExploreCategory("Hill Country Trekkers", "Mountain road trips & scenic views", "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=600&q=80"),
-        ExploreCategory("Coastal Foodies", "Street food, brunch & beach sunset talks", "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=600&q=80"),
-        ExploreCategory("City Creatives", "Weekend road trips & meetups nearby", "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=600&q=80")
-    )
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(bottom = 78.dp)
-            .padding(horizontal = 20.dp, vertical = 16.dp)
-    ) {
-        Text(
-            text = "Explore Nearby",
-            color = DashboardCream,
-            fontSize = 28.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Serif
-        )
-        Text(
-            text = "Curated spaces to meet like-minded singles",
-            color = DashboardCream.copy(alpha = 0.7f),
-            fontSize = 14.sp
-        )
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            items(categories) { cat ->
-                Surface(
-                    onClick = { onSelectCategory(cat.title) },
-                    shape = RoundedCornerShape(18.dp),
-                    color = DashboardCard,
-                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.1f)),
-                    modifier = Modifier.fillMaxWidth().height(120.dp)
-                ) {
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        AsyncImage(
-                            model = cat.image,
-                            contentDescription = cat.title,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(
-                                    Brush.horizontalGradient(
-                                        listOf(Color(0xEB201B18), Color(0x73201B18))
-                                    )
-                                )
-                        )
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(18.dp),
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            Text(
-                                text = cat.title,
-                                color = DashboardCream,
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = cat.subtitle,
-                                color = DashboardPeach,
-                                fontSize = 12.sp
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-private data class ExploreCategory(val title: String, val subtitle: String, val image: String)
 
 // -------------------------------------------------------------
 // LIKES VIEW
@@ -1240,280 +1262,6 @@ private fun ChatListView(profiles: List<DatingProfile>) {
 }
 
 // -------------------------------------------------------------
-// USER PROFILE VIEW (Allows reviewing & re-entering Onboarding)
-// -------------------------------------------------------------
-@Composable
-private fun UserProfileView(
-    userDraft: OnboardingDraft,
-    onEditProfile: () -> Unit,
-    onSignOut: () -> Unit
-) {
-    val scrollState = rememberScrollState()
-    // Sign-out confirmation dialog state
-    var showSignOutDialog by remember { mutableStateOf(false) }
-    var signingOut by remember { mutableStateOf(false) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(bottom = 78.dp)
-            .verticalScroll(scrollState)
-            .padding(horizontal = 20.dp, vertical = 16.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "My Profile",
-                color = DashboardCream,
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Serif
-            )
-
-            Button(
-                onClick = onEditProfile,
-                shape = RoundedCornerShape(50),
-                colors = ButtonDefaults.buttonColors(containerColor = DashboardTerracotta),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Edit,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Edit Profile", color = Color.White, fontSize = 13.sp)
-            }
-        }
-
-        Spacer(modifier = Modifier.height(18.dp))
-
-        // Main User Card Preview
-        Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = DashboardCard,
-            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(18.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    val mainPhoto = userDraft.photos.firstOrNull()
-                        ?: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80"
-                    AsyncImage(
-                        model = mainPhoto,
-                        contentDescription = "User Avatar",
-                        modifier = Modifier
-                            .size(76.dp)
-                            .clip(CircleShape)
-                            .border(2.dp, DashboardTerracotta, CircleShape),
-                        contentScale = ContentScale.Crop
-                    )
-
-                    Spacer(modifier = Modifier.width(16.dp))
-
-                    Column {
-                        Text(
-                            text = "You, ${userDraft.calculatedAge}",
-                            color = DashboardCream,
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Serif
-                        )
-                        Text(
-                            text = "⌖ ${userDraft.city.ifBlank { "Your city" }} · Seeking ${userDraft.lookingFor.ifBlank { "Women" }}",
-                            color = DashboardPeach,
-                            fontSize = 13.sp
-                        )
-                        Text(
-                            text = "Goal: ${userDraft.goal.ifBlank { "Something serious" }}",
-                            color = DashboardCream.copy(alpha = 0.7f),
-                            fontSize = 12.sp
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Text(
-                    text = userDraft.bio.ifBlank { "No bio added yet. Tap edit profile to customize." },
-                    color = DashboardCream.copy(alpha = 0.9f),
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp
-                )
-
-                if (userDraft.interests.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        userDraft.interests.take(4).forEach { interest ->
-                            Surface(
-                                shape = RoundedCornerShape(50),
-                                color = Color.White.copy(alpha = 0.1f),
-                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f))
-                            ) {
-                                Text(
-                                    text = interest,
-                                    color = DashboardCream,
-                                    fontSize = 11.sp,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // Prompts Section
-        Text(
-            text = "My Prompts",
-            color = DashboardCream,
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Serif
-        )
-        Spacer(modifier = Modifier.height(10.dp))
-
-        userDraft.prompts.forEach { p ->
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = DashboardCard,
-                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 10.dp)
-            ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Text(
-                        text = p.question,
-                        color = DashboardPeach,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = p.answer.ifBlank { "Tap edit profile to answer" },
-                        color = DashboardCream,
-                        fontSize = 14.sp
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(20.dp))
-
-        // Onboarding checklist / Profile completion
-        Surface(
-            shape = RoundedCornerShape(18.dp),
-            color = Color(0x38201B18),
-            border = BorderStroke(1.dp, DashboardTerracotta.copy(alpha = 0.4f)),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Profile Strength: 100%",
-                        color = DashboardCream,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "All 9 Steps Done",
-                        color = DashboardPeach,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                LinearProgressIndicator(
-                    progress = { 1f },
-                    modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(50)),
-                    color = DashboardTerracotta,
-                    trackColor = Color.White.copy(alpha = 0.15f)
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        OutlinedButton(
-            onClick = { showSignOutDialog = true },
-            modifier = Modifier.fillMaxWidth().height(50.dp),
-            shape = RoundedCornerShape(50),
-            border = BorderStroke(1.dp, DashboardTerracotta.copy(alpha = 0.7f)),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = DashboardPeach)
-        ) {
-            Text("Sign Out", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-        }
-    }
-
-    // Sign Out confirmation dialog (child of the existing root container — no inset change)
-    if (showSignOutDialog) {
-        AlertDialog(
-            onDismissRequest = {
-                if (!signingOut) showSignOutDialog = false
-            },
-            title = {
-                Text(
-                    text = "Sign Out?",
-                    fontWeight = FontWeight.Bold,
-                    color = DashboardCream
-                )
-            },
-            text = {
-                Text(
-                    text = "Are you sure you want to sign out? You'll need your email and password to sign back in.",
-                    color = DashboardMutedBeige,
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        signingOut = true
-                        onSignOut()
-                    },
-                    enabled = !signingOut,
-                    colors = ButtonDefaults.buttonColors(containerColor = NopeCoral)
-                ) {
-                    if (signingOut) {
-                        CircularProgressIndicator(
-                            color = Color.White,
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp
-                        )
-                    } else {
-                        Text("Sign Out", color = Color.White, fontWeight = FontWeight.Bold)
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = { showSignOutDialog = false },
-                    enabled = !signingOut
-                ) {
-                    Text("Cancel", color = DashboardNavMuted)
-                }
-            },
-            containerColor = DashboardCard
-        )
-    }
-}
-
-// -------------------------------------------------------------
 // FILTER BOTTOM SHEET CONTENT
 // -------------------------------------------------------------
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1782,15 +1530,38 @@ private fun MatchCelebrationDialog(
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                AsyncImage(
-                    model = userPhoto.ifBlank { "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80" },
-                    contentDescription = "You",
-                    modifier = Modifier
-                        .size(90.dp)
-                        .clip(CircleShape)
-                        .border(3.dp, DashboardTerracotta, CircleShape),
-                    contentScale = ContentScale.Crop
-                )
+                // Match celebration — "You" avatar. Falls back to a neutral
+                // person-silhouette Box+Icon when the user has no profile photo
+                // yet (e.g. fresh signup before first photo upload). No Unsplash
+                // placeholder URL — the previous external-image fallback leaked
+                // a hard-coded stock photo into the user's match modal.
+                if (userPhoto.isNotBlank()) {
+                    AsyncImage(
+                        model = userPhoto,
+                        contentDescription = "You",
+                        modifier = Modifier
+                            .size(90.dp)
+                            .clip(CircleShape)
+                            .border(3.dp, DashboardTerracotta, CircleShape),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(90.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFFEDE7E1))
+                            .border(3.dp, DashboardTerracotta, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Person,
+                            contentDescription = "You",
+                            tint = Color(0xFFB9AFA6),
+                            modifier = Modifier.size(44.dp)
+                        )
+                    }
+                }
                 Spacer(modifier = Modifier.width(16.dp))
                 Text("♥", fontSize = 28.sp, color = DashboardTerracotta)
                 Spacer(modifier = Modifier.width(16.dp))
