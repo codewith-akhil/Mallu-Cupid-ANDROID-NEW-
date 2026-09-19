@@ -56,7 +56,7 @@ fun AccountSettingsScreen(
     var draft by remember { mutableStateOf(initialDraft) }
 
     // Sub-screen navigation states
-    var currentSubView by remember { mutableStateOf("MAIN") } // "MAIN", "BLOCKED_USERS", "DELETE_ACCOUNT", "ACTIVE_STATUS", "EMAIL_SETTINGS", "PUSH_NOTIFICATIONS", "FACE_VERIFICATION"
+    var currentSubView by remember { mutableStateOf("MAIN") } // "MAIN", "BLOCKED_USERS", "DELETE_ACCOUNT", "ACTIVE_STATUS", "FACE_VERIFICATION"
     var userToUnblock by remember { mutableStateOf<BlockedUser?>(null) }
 
     // ---- Action loading states ----
@@ -95,15 +95,6 @@ fun AccountSettingsScreen(
                 interestedIn = profile?.interestedIn?.takeIf { it.isNotEmpty() } ?: draft.interestedIn,
                 showActiveStatus = settings?.showActiveStatus ?: draft.showActiveStatus,
                 showRecentlyActiveStatus = settings?.showRecentlyActiveStatus ?: draft.showRecentlyActiveStatus,
-                emailSubMatches = settings?.emailSubMatches ?: draft.emailSubMatches,
-                emailSubMessages = settings?.emailSubMessages ?: draft.emailSubMessages,
-                emailSubPromos = settings?.emailSubPromos ?: draft.emailSubPromos,
-                pushMatches = settings?.pushMatches ?: draft.pushMatches,
-                pushMessages = settings?.pushMessages ?: draft.pushMessages,
-                pushMessageLikes = settings?.pushMessageLikes ?: draft.pushMessageLikes,
-                pushSuperLikes = settings?.pushSuperLikes ?: draft.pushSuperLikes,
-                pushPromos = settings?.pushPromos ?: draft.pushPromos,
-                pushLikesFrequency = settings?.pushLikesFrequency ?: draft.pushLikesFrequency,
             )
         }
         settingsLoading = false
@@ -149,22 +140,7 @@ fun AccountSettingsScreen(
             )
         }
 
-        "EMAIL_SETTINGS" -> {
-            EmailSettingsScreen(
-                draft = draft,
-                onUpdateDraft = { draft = it },
-                onBack = { currentSubView = "MAIN" }
-            )
-        }
-
-        "PUSH_NOTIFICATIONS" -> {
-            PushNotificationsScreen(
-                draft = draft,
-                onUpdateDraft = { draft = it },
-                onBack = { currentSubView = "MAIN" }
-            )
-        }
-
+        
         "BLOCKED_USERS" -> {
             BlockedUsersScreen(
                 blockedUsers = draft.blockedUsers,
@@ -392,7 +368,7 @@ fun AccountSettingsScreen(
                                     colors = SliderDefaults.colors(
                                         thumbColor = DashboardPeach,
                                         activeTrackColor = DashboardTerracotta,
-                                        inactiveTrackColor = Color(0xFF382D27)
+                                        inactiveTrackColor = Color(0xFFE0E0E0)
                                     ),
                                     modifier = Modifier.padding(top = 4.dp)
                                 )
@@ -403,7 +379,7 @@ fun AccountSettingsScreen(
                                 )
                             }
 
-                            HorizontalDivider(color = Color(0xFF382D27))
+                            HorizontalDivider(color = Color(0xFFE0E0E0))
 
                             // Interested In Selection:
                             // Women, Men, Transmen, Transwomen, Couples, Anyone
@@ -451,10 +427,10 @@ fun AccountSettingsScreen(
                                                         saveProfilePatch(ProfileSettingsPatch(interestedIn = updatedList))
                                                     },
                                                     shape = RoundedCornerShape(10.dp),
-                                                    color = if (isSelected) DashboardTerracotta else Color(0xFF261E1A),
+                                                    color = if (isSelected) DashboardTerracotta else Color.White,
                                                     border = BorderStroke(
                                                         1.dp,
-                                                        if (isSelected) DashboardPeach else Color(0xFF42342D)
+                                                        if (isSelected) DashboardPeach else Color(0xFFCCCCCC)
                                                     ),
                                                     modifier = Modifier.weight(1f)
                                                 ) {
@@ -486,7 +462,7 @@ fun AccountSettingsScreen(
                                 }
                             }
 
-                            HorizontalDivider(color = Color(0xFF382D27))
+                            HorizontalDivider(color = Color(0xFFE0E0E0))
 
                             // Age Group Range
                             Column {
@@ -532,7 +508,7 @@ fun AccountSettingsScreen(
                                     colors = SliderDefaults.colors(
                                         thumbColor = DashboardPeach,
                                         activeTrackColor = DashboardTerracotta,
-                                        inactiveTrackColor = Color(0xFF382D27)
+                                        inactiveTrackColor = Color(0xFFE0E0E0)
                                     ),
                                     modifier = Modifier.padding(top = 4.dp)
                                 )
@@ -578,7 +554,7 @@ fun AccountSettingsScreen(
                                     colors = CheckboxDefaults.colors(
                                         checkedColor = DashboardTerracotta,
                                         checkmarkColor = Color.White,
-                                        uncheckedColor = Color(0xFF6B584E)
+                                        uncheckedColor = Color(0xFF999999)
                                     )
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
@@ -623,7 +599,7 @@ fun AccountSettingsScreen(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(Color(0xFF261E1A), RoundedCornerShape(10.dp))
+                                    .background(Color.White, RoundedCornerShape(10.dp))
                                     .padding(horizontal = 14.dp, vertical = 12.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
@@ -662,7 +638,7 @@ fun AccountSettingsScreen(
                                         checkedThumbColor = Color.White,
                                         checkedTrackColor = Color(0xFF4CAF50),
                                         uncheckedThumbColor = DashboardNavMuted,
-                                        uncheckedTrackColor = Color(0xFF382D27)
+                                        uncheckedTrackColor = Color(0xFFE0E0E0)
                                     )
                                 )
                             }
@@ -671,8 +647,8 @@ fun AccountSettingsScreen(
                             Surface(
                                 onClick = { currentSubView = "ACTIVE_STATUS" },
                                 shape = RoundedCornerShape(10.dp),
-                                color = Color(0xFF261E1A),
-                                border = BorderStroke(1.dp, Color(0xFF42342D)),
+                                color = Color.White,
+                                border = BorderStroke(1.dp, Color(0xFFCCCCCC)),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Row(
@@ -715,99 +691,6 @@ fun AccountSettingsScreen(
                     // NOTIFICATIONS & EMAIL SETTINGS
                     // ==========================================
                     SettingsSectionCard(
-                        title = "Notifications & Email",
-                        subtitle = "Manage real-time alerts and subscription preferences",
-                        icon = Icons.Default.Notifications
-                    ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            // Push Notifications (Screenshot 3)
-                            Surface(
-                                onClick = { currentSubView = "PUSH_NOTIFICATIONS" },
-                                shape = RoundedCornerShape(10.dp),
-                                color = Color(0xFF261E1A),
-                                border = BorderStroke(1.dp, Color(0xFF42342D)),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.NotificationsActive,
-                                        contentDescription = null,
-                                        tint = DashboardPeach,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = "Push Notifications",
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = DashboardCream
-                                        )
-                                        Text(
-                                            text = "Matches, messages, likes & frequency",
-                                            fontSize = 11.sp,
-                                            color = DashboardNavMuted
-                                        )
-                                    }
-                                    Icon(
-                                        imageVector = Icons.Default.ChevronRight,
-                                        contentDescription = null,
-                                        tint = DashboardNavMuted
-                                    )
-                                }
-                            }
-
-                            // Email Settings (Screenshot 2)
-                            Surface(
-                                onClick = { currentSubView = "EMAIL_SETTINGS" },
-                                shape = RoundedCornerShape(10.dp),
-                                color = Color(0xFF261E1A),
-                                border = BorderStroke(1.dp, Color(0xFF42342D)),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Email,
-                                        contentDescription = null,
-                                        tint = DashboardPeach,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = "Email Subscriptions",
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = DashboardCream
-                                        )
-                                        Text(
-                                            text = "${draft.registeredEmail} · Preferences",
-                                            fontSize = 11.sp,
-                                            color = DashboardNavMuted
-                                        )
-                                    }
-                                    Icon(
-                                        imageVector = Icons.Default.ChevronRight,
-                                        contentDescription = null,
-                                        tint = DashboardNavMuted
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // ==========================================
-                    // 4. BLOCKED CONTACTS
-                    // ==========================================
-                    SettingsSectionCard(
                         title = "Blocked Contacts",
                         subtitle = "Manage contacts and users you've blocked from finding you",
                         icon = Icons.Default.Block
@@ -815,8 +698,8 @@ fun AccountSettingsScreen(
                         Surface(
                             onClick = { currentSubView = "BLOCKED_USERS" },
                             shape = RoundedCornerShape(12.dp),
-                            color = Color(0xFF261E1A),
-                            border = BorderStroke(1.dp, Color(0xFF42342D)),
+                            color = Color.White,
+                            border = BorderStroke(1.dp, Color(0xFFCCCCCC)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
@@ -825,7 +708,7 @@ fun AccountSettingsScreen(
                             ) {
                                 Surface(
                                     shape = CircleShape,
-                                    color = Color(0xFF382D27),
+                                    color = Color(0xFFE0E0E0),
                                     modifier = Modifier.size(38.dp)
                                 ) {
                                     Box(contentAlignment = Alignment.Center) {
@@ -901,8 +784,8 @@ fun AccountSettingsScreen(
                             // Verification Status: Verified or Unverified
                             Surface(
                                 shape = RoundedCornerShape(10.dp),
-                                color = Color(0xFF261E1A),
-                                border = BorderStroke(1.dp, Color(0xFF42342D)),
+                                color = Color.White,
+                                border = BorderStroke(1.dp, Color(0xFFCCCCCC)),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Row(
@@ -994,7 +877,7 @@ fun AccountSettingsScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = "Delete My Account",
-                            fontSize = 15.sp,
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -1098,8 +981,8 @@ private fun AccountDataField(
 ) {
     Surface(
         shape = RoundedCornerShape(10.dp),
-        color = Color(0xFF261E1A),
-        border = BorderStroke(1.dp, Color(0xFF42342D)),
+        color = Color.White,
+        border = BorderStroke(1.dp, Color(0xFFCCCCCC)),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
@@ -1140,14 +1023,14 @@ private fun SettingsSectionCard(
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = DashboardCard,
-        border = BorderStroke(1.dp, Color(0xFF42342D)),
+        border = BorderStroke(1.dp, Color(0xFFCCCCCC)),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Surface(
                     shape = CircleShape,
-                    color = Color(0xFF261E1A),
+                    color = Color.White,
                     modifier = Modifier.size(34.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
@@ -1163,7 +1046,7 @@ private fun SettingsSectionCard(
                 Column {
                     Text(
                         text = title,
-                        fontSize = 15.sp,
+                        fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
                         color = DashboardCream
                     )
@@ -1269,7 +1152,7 @@ fun BlockedUsersScreen(
                 shape = RoundedCornerShape(14.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = DashboardPeach,
-                    unfocusedBorderColor = Color(0xFF42342D),
+                    unfocusedBorderColor = Color(0xFFCCCCCC),
                     focusedContainerColor = DashboardCard,
                     unfocusedContainerColor = DashboardCard,
                     focusedTextColor = DashboardCream,
@@ -1326,7 +1209,7 @@ fun BlockedUsersScreen(
                         Surface(
                             shape = RoundedCornerShape(14.dp),
                             color = DashboardCard,
-                            border = BorderStroke(1.dp, Color(0xFF42342D)),
+                            border = BorderStroke(1.dp, Color(0xFFCCCCCC)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
@@ -1347,7 +1230,7 @@ fun BlockedUsersScreen(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = user.name,
-                                        fontSize = 15.sp,
+                                        fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = DashboardCream
                                     )
@@ -1361,7 +1244,7 @@ fun BlockedUsersScreen(
                                 Button(
                                     onClick = { onUnblockUser(user) },
                                     colors = ButtonDefaults.buttonColors(
-                                        containerColor = Color(0xFF261E1A),
+                                        containerColor = Color.White,
                                         contentColor = DashboardPeach
                                     ),
                                     border = BorderStroke(1.dp, DashboardPeach),
@@ -1503,7 +1386,7 @@ fun DeleteAccountScreen(
                         color = if (isSelected) Color(0xFF3D2520) else DashboardCard,
                         border = BorderStroke(
                             1.dp,
-                            if (isSelected) NopeCoral else Color(0xFF42342D)
+                            if (isSelected) NopeCoral else Color(0xFFCCCCCC)
                         ),
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -1516,7 +1399,7 @@ fun DeleteAccountScreen(
                                 onClick = { selectedReason = reason },
                                 colors = RadioButtonDefaults.colors(
                                     selectedColor = NopeCoral,
-                                    unselectedColor = Color(0xFF6B584E)
+                                    unselectedColor = Color(0xFF999999)
                                 )
                             )
                             Spacer(modifier = Modifier.width(8.dp))
@@ -1555,7 +1438,7 @@ fun DeleteAccountScreen(
                 shape = RoundedCornerShape(12.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = DashboardPeach,
-                    unfocusedBorderColor = Color(0xFF42342D),
+                    unfocusedBorderColor = Color(0xFFCCCCCC),
                     focusedContainerColor = DashboardCard,
                     unfocusedContainerColor = DashboardCard,
                     focusedTextColor = DashboardCream,
@@ -1583,7 +1466,7 @@ fun DeleteAccountScreen(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = "Confirm Account Deletion",
-                    fontSize = 15.sp,
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -1592,7 +1475,7 @@ fun DeleteAccountScreen(
 
             OutlinedButton(
                 onClick = onBack,
-                border = BorderStroke(1.dp, Color(0xFF42342D)),
+                border = BorderStroke(1.dp, Color(0xFFCCCCCC)),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = DashboardCream),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth()
