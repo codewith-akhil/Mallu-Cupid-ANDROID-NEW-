@@ -12,7 +12,6 @@ import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.mallucupid.app.MainActivity
-import com.mallucupid.app.data.remote.SessionManager
 import com.mallucupid.app.data.remote.SupabaseClient
 import com.mallucupid.app.data.remote.SupabaseConfig
 import okhttp3.Request
@@ -25,6 +24,21 @@ class MalluCupidMessagingService : FirebaseMessagingService() {
         const val CHANNEL_ID = "mallu_cupid_notifications"
         const val CHANNEL_NAME = "Mallu Cupid Notifications"
         private const val TAG = "MalluFCM"
+
+        /**
+         * In-memory stash for an FCM token that arrived before the user signed in
+         * (or before SessionManager.init / SupabaseClient.accessToken was set).
+         *
+         * Lifecycle:
+         *  - Set by [onNewToken] when FCM fires before login completes.
+         *  - Read + cleared by [flushPendingToken] once SessionManager has
+         *    restored/established an access token.
+         *
+         * `@Volatile` because it is written by FCM's binder thread (onNewToken)
+         * and read by the SessionManager init thread.
+         */
+        @Volatile
+        var pendingToken: String? = null
 
         fun createNotificationChannel(context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -41,11 +55,22 @@ class MalluCupidMessagingService : FirebaseMessagingService() {
         }
 
         /**
-         * Called from SessionManager.flushPendingToken() once a user signs in.
-         * Schedules the FCM token sync on a daemon thread so the calling thread
-         * (usually main or SessionManager.init) is never blocked.
+         * Called by SessionManager.init() (and after a successful sign-in).
+         *
+         * If we have a stashed [pendingToken] AND a live access token in
+         * [SupabaseClient], spawn a daemon thread to PATCH the token to the
+         * `profiles` table, then clear the stash. Safe to call repeatedly —
+         * returns true if a sync was actually dispatched, false otherwise.
          */
-        fun syncTokenToSupabaseBackground(token: String, accessToken: String) {
+        fun flushPendingToken(): Boolean {
+            val token = pendingToken ?: return false
+            val accessToken = SupabaseClient.accessToken ?: run {
+                Log.i(TAG, "flushPendingToken: token stashed but no access token yet — deferring")
+                return false
+            }
+            // Clear BEFORE the network call so a duplicate flush (e.g. triggered
+            // by another sign-in) doesn't fire two PATCHes in parallel.
+            pendingToken = null
             val worker = Thread {
                 runCatching { syncTokenToSupabaseBlocking(token, accessToken) }
                     .onFailure { Log.e(TAG, "Background FCM sync failed", it) }
@@ -53,16 +78,19 @@ class MalluCupidMessagingService : FirebaseMessagingService() {
             worker.name = "fcm-token-sync"
             worker.isDaemon = true
             worker.start()
+            return true
         }
 
         /**
          * Performs the actual REST PATCH synchronously. Must be called off the
-         * main thread. Public so SessionManager can call it on its own worker.
+         * main thread. Returns true on HTTP 2xx, false otherwise. Logs the HTTP
+         * status on both success and failure paths so the sync can be diagnosed
+         * from logcat.
          */
-        fun syncTokenToSupabaseBlocking(token: String, accessToken: String) {
+        private fun syncTokenToSupabaseBlocking(token: String, accessToken: String): Boolean {
             val userId = extractUserIdFromJwt(accessToken) ?: run {
                 Log.w(TAG, "Cannot sync FCM token: user id not found in JWT")
-                return
+                return false
             }
             val json = "application/json; charset=utf-8".toMediaType()
             val body = """{"fcm_token":"$token"}""".toRequestBody(json)
@@ -74,49 +102,65 @@ class MalluCupidMessagingService : FirebaseMessagingService() {
                 .addHeader("Prefer", "return=minimal")
                 .patch(body)
                 .build()
-            SupabaseClient.http.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    Log.w(TAG, "FCM token sync failed: HTTP ${resp.code}")
-                } else {
-                    Log.d(TAG, "FCM token synced for user $userId")
+            return try {
+                SupabaseClient.http.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) {
+                        Log.w(TAG, "FCM token sync failed: HTTP ${resp.code} for user $userId")
+                        false
+                    } else {
+                        Log.i(TAG, "FCM token synced for user $userId (HTTP ${resp.code})")
+                        true
+                    }
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "FCM token sync network failure for user $userId", e)
+                false
             }
         }
 
         /**
-         * Called by SessionManager after a successful login — re-flushes any
-         * stashed pending token. Safe to call repeatedly.
+         * Decodes the JWT payload and extracts the `sub` claim (Supabase user id).
+         * Uses URL-safe Base64 decoding without depending on any JWT library.
          */
-        fun flushPendingToken() {
-            SessionManager.flushPendingToken()
-        }
-
         private fun extractUserIdFromJwt(jwt: String): String? {
             return try {
                 val parts = jwt.split(".")
-                if (parts.size < 2) return null
-                val padded = parts[1].padEnd((parts[1].length + 3) / 4 * 4, '=')
+                if (parts.size < 2) {
+                    Log.w(TAG, "JWT has fewer than 2 segments — cannot extract sub")
+                    return null
+                }
+                val payload = parts[1]
+                val padded = payload.padEnd((payload.length + 3) / 4 * 4, '=')
                 val decoded = android.util.Base64.decode(padded, android.util.Base64.URL_SAFE)
                 val json = String(decoded, Charsets.UTF_8)
                 val subRegex = """"sub"\s*:\s*"([^"]+)"""".toRegex()
                 subRegex.find(json)?.groupValues?.get(1)
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to decode JWT sub", e); null
+                Log.w(TAG, "Failed to decode JWT sub", e)
+                null
             }
         }
     }
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
-        Log.d(TAG, "onNewToken received")
+        Log.i(TAG, "onNewToken received")
         val accessToken = SupabaseClient.accessToken
         if (accessToken.isNullOrBlank()) {
-            // Not signed in yet — stash the token; SessionManager will flush it on login.
-            Log.d(TAG, "No access token yet — stashing FCM token for later")
-            SessionManager.stashPendingFcmToken(token)
+            // Not signed in yet — stash in memory; SessionManager.init() or
+            // saveSession() will flush it once we have an access token.
+            Log.i(TAG, "No access token yet — stashing FCM token for later flush")
+            pendingToken = token
         } else {
-            // Already signed in — sync now on a daemon thread so FCM's binder thread is not blocked.
-            syncTokenToSupabaseBackground(token, accessToken)
+            // Already signed in — sync now on a daemon thread so FCM's binder
+            // thread is not blocked.
+            val worker = Thread {
+                runCatching { syncTokenToSupabaseBlocking(token, accessToken) }
+                    .onFailure { Log.e(TAG, "onNewToken direct sync failed", it) }
+            }
+            worker.name = "fcm-token-onnew"
+            worker.isDaemon = true
+            worker.start()
         }
     }
 
