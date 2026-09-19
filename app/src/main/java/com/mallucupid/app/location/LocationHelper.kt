@@ -146,8 +146,11 @@ object LocationHelper {
             }
         } ?: run {
             // Fresh fix failed — try the cached last location before giving up.
+            // 3s timeout: lastLocation is a fast in-memory cache lookup (no fresh
+            // GPS fix required), so it should resolve within milliseconds; the
+            // 3s ceiling is a safety net for slow Play Services bind.
             try {
-                withTimeoutOrNull(2_000L) {
+                withTimeoutOrNull(3_000L) {
                     suspendCancellableCoroutine<Location?> { cont ->
                         fusedClient.lastLocation
                             .addOnSuccessListener { loc -> cont.resume(loc) }

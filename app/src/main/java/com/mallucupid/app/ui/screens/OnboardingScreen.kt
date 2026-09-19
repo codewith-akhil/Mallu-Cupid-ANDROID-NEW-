@@ -127,7 +127,18 @@ fun OnboardingScreen(
             3 -> {
                 val age = draft.calculatedAge
                 val minAge = draft.countryMinAge
-                if (draft.birthDay.isBlank() || draft.birthMonth.isBlank() || draft.birthYear.isBlank() || age < minAge || age > 100) {
+                val day = draft.birthDay.toIntOrNull()
+                val month = draft.birthMonth.toIntOrNull()
+                val year = draft.birthYear.toIntOrNull()
+                if (draft.birthDay.isBlank() || draft.birthMonth.isBlank() || draft.birthYear.isBlank()) {
+                    "Please enter your full date of birth."
+                } else if (day == null || day < 1 || day > 31) {
+                    "Day must be between 1 and 31."
+                } else if (month == null || month < 1 || month > 12) {
+                    "Month must be between 1 and 12."
+                } else if (year == null || year < 1925 || year > java.time.LocalDate.now().year) {
+                    "Please enter a valid birth year."
+                } else if (age < minAge || age > 100) {
                     "You must be $minAge or older to join."
                 } else ""
             }
@@ -1047,18 +1058,25 @@ private fun Step3Location(
             val loc = LocationHelper.getCurrentLocation(context)
             isLocating = false
             if (loc != null) {
-                // Single combined write — city + lat + lng in one update so we don't
-                // emit two recompositions / partial state.
-                onCityChangeRef.value(loc.fullLocation, loc.latitude, loc.longitude)
+                // Only write the resolved location back to the draft if the user
+                // hasn't typed anything into the city field yet. This prevents an
+                // in-flight GPS fetch (auto-fired on step load, or user-tapped)
+                // from clobbering a half-typed city. The country is always
+                // propagated, even if the user typed something — country detection
+                // is metadata, not city text.
+                if (!userEditedCity) {
+                    onCityChangeRef.value(loc.fullLocation, loc.latitude, loc.longitude)
+                }
                 locationError = null
                 if (loc.countryCode.isNotBlank()) {
                     val minAge = SupabaseRepository.getMinAgeForCountry(loc.countryCode)
                     onCountryDetectedRef.value(loc.countryName, loc.countryCode, minAge)
                 }
             } else {
+                // Don't wipe the city on failure — the user may have typed
+                // something while the fetch was in flight. Just surface the error
+                // so they can retry or keep typing.
                 locationError = "Could not get your location. Please type your city manually."
-                // Only clear the city if the user hasn't typed anything yet.
-                if (!userEditedCity) onCityChangeRef.value("", null, null)
             }
         }
     }
