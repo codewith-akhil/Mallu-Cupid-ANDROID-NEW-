@@ -51,6 +51,7 @@ object SupabaseRepository {
         List::class.java, ProfileSettingsDto::class.java
     ).let { moshi.adapter<List<ProfileSettingsDto>>(it) }
     private val profileSettingsPatchAdapter = moshi.adapter(ProfileSettingsPatch::class.java)
+    private val swipeStatusAdapter = moshi.adapter(SwipeStatusDto::class.java)
 
     // ---------- Swipe deck ----------
 
@@ -310,17 +311,22 @@ object SupabaseRepository {
         // Photos may be local content:// or file:// URIs from the picker — they MUST be
         // uploaded to Supabase Storage first; storing a content:// URI in the DB
         // would persist a permission that dies with the picker activity and the
-        // photo would never render anywhere outside this device. We upload each
-        // photo, collect the resulting public URL, and skip the entry on failure
-        // (so the user's profile is never saved with a dead photo slot).
-        val resolvedPhotos = draft.photos.map { source ->
-            if (source.startsWith("content://") || source.startsWith("file://")) {
-                runCatching { uploadPhoto(userId, android.net.Uri.parse(source)) }
-                    .getOrNull() ?: source  // fall back to the raw string (e.g. remote URL) on failure
-            } else {
-                source  // already a remote URL (e.g. pre-existing Storage path)
+        // photo would never render anywhere outside this device.
+        //
+        // We upload each photo, collect the resulting public URL, and SKIP the
+        // entry entirely on failure (so the user's profile is never saved with
+        // a dead photo slot pointing at a content:// or file:// URI). Remote
+        // https:// URLs are preserved as-is — they are already in Storage.
+        val resolvedPhotos: List<String> = draft.photos.mapNotNull { source ->
+            when {
+                source.startsWith("content://") || source.startsWith("file://") -> {
+                    runCatching { uploadPhoto(userId, android.net.Uri.parse(source)) }
+                        .getOrNull()  // null = upload failed → skip this slot
+                }
+                source.startsWith("https://") -> source  // already in Storage
+                else -> null  // unknown scheme → skip rather than persist garbage
             }
-        }.filter { it.isNotBlank() }
+        }
         val profile = ProfileUpsert(
             id = userId,
             name = draft.name,
@@ -381,16 +387,18 @@ object SupabaseRepository {
         val profileOk = SupabaseClient.http.newCall(req).execute().use { it.isSuccessful }
         if (!profileOk) return@withContext false
 
-        // Replace photos (delete + insert)
+        // Replace photos (delete + insert). Use the resolved (uploaded) URLs —
+        // never the raw content:// / file:// URIs. Failed uploads were already
+        // filtered out of `resolvedPhotos` above, so every entry here is a valid
+        // Storage URL.
         SupabaseClient.http.newCall(
             Request.Builder()
                 .url("${SupabaseConfig.REST_BASE}/profile_photos?user_id=eq.$userId")
                 .delete()
                 .build()
         ).execute().close()
-        draft.photos.forEachIndexed { index, url ->
-            // Use the resolved (uploaded) URL here — never the raw content:// URI.
-            val photo = PhotoUpsert(userId, resolvedPhotos.getOrNull(index) ?: url, index, index == 0)
+        resolvedPhotos.forEachIndexed { index, url ->
+            val photo = PhotoUpsert(userId, url, index, index == 0)
             val pbody = photoAdapter.toJson(photo)
             SupabaseClient.http.newCall(
                 Request.Builder()
@@ -675,23 +683,24 @@ object SupabaseRepository {
     }
 
     /**
-     * Uploads a voice-message audio file to Supabase Storage (bucket: voice-messages).
-     * Path: {userId}/{timestamp}.m4a (caller can override the extension via [ext]).
+     * Uploads a voice-message audio file (raw bytes from the in-app MediaRecorder)
+     * to Supabase Storage (bucket: voice-messages).
+     * Path: {userId}/{timestamp}.m4a
      * Returns the public URL on success, or null on failure.
+     *
+     * Auth guard: the access token MUST be present — Storage buckets are RLS-
+     * protected and the upload will 403 with the anon key. We also add an
+     * explicit Authorization: Bearer header so we don't rely on the OkHttp
+     * interceptor when the request is constructed from a freshly-acquired token.
      */
-    suspend fun uploadVoiceMessage(userId: String, audioUri: android.net.Uri, ext: String = "m4a"): String? = withContext(Dispatchers.IO) {
+    suspend fun uploadVoiceMessage(userId: String, audioBytes: ByteArray): String? = withContext(Dispatchers.IO) {
         try {
             val accessToken = SupabaseClient.accessToken ?: return@withContext null
-            val context = com.mallucupid.app.MalluCupidApp.appContext
-            val inputStream = context.contentResolver.openInputStream(audioUri) ?: return@withContext null
-            val bytes = inputStream.readBytes()
-            inputStream.close()
-
-            val fileName = "${System.currentTimeMillis()}.$ext"
+            val fileName = "${System.currentTimeMillis()}.m4a"
             val storagePath = "$userId/$fileName"
-            val mimeType = context.contentResolver.getType(audioUri) ?: "audio/mp4"
+            val mimeType = "audio/mp4"
             val mediaType = mimeType.toMediaType()
-            val requestBody = bytes.toRequestBody(mediaType)
+            val requestBody = audioBytes.toRequestBody(mediaType)
 
             val req = Request.Builder()
                 .url("${SupabaseConfig.SUPABASE_URL}/storage/v1/object/voice-messages/$storagePath")
@@ -714,8 +723,13 @@ object SupabaseRepository {
      * Uploads a chat media file (photo or video) to Supabase Storage (bucket: chat-media).
      * Path: {userId}/{timestamp}.{ext}
      * Returns the public URL on success, or null on failure.
+     *
+     * Auth guard: the access token MUST be present — Storage buckets are RLS-
+     * protected and the upload will 403 with the anon key. We also add an
+     * explicit Authorization: Bearer header so we don't rely on the OkHttp
+     * interceptor when the request is constructed from a freshly-acquired token.
      */
-    suspend fun uploadChatMedia(userId: String, mediaUri: android.net.Uri, ext: String): String? = withContext(Dispatchers.IO) {
+    suspend fun uploadChatMedia(userId: String, mediaUri: android.net.Uri, isVideo: Boolean): String? = withContext(Dispatchers.IO) {
         try {
             val accessToken = SupabaseClient.accessToken ?: return@withContext null
             val context = com.mallucupid.app.MalluCupidApp.appContext
@@ -723,9 +737,11 @@ object SupabaseRepository {
             val bytes = inputStream.readBytes()
             inputStream.close()
 
+            val ext = if (isVideo) "mp4" else "jpg"
             val fileName = "${System.currentTimeMillis()}.$ext"
             val storagePath = "$userId/$fileName"
-            val mimeType = context.contentResolver.getType(mediaUri) ?: "application/octet-stream"
+            val mimeType = context.contentResolver.getType(mediaUri)
+                ?: if (isVideo) "video/mp4" else "image/jpeg"
             val mediaType = mimeType.toMediaType()
             val requestBody = bytes.toRequestBody(mediaType)
 
@@ -750,19 +766,20 @@ object SupabaseRepository {
 
     /**
      * Returns the current user's swipe quota + Pro status.
-     * Calls the `get_swipe_status` RPC (or falls back to a sane default on error).
+     * Calls the `get_swipe_status` RPC. The RPC derives the caller identity
+     * from the JWT (auth.uid()) so we do NOT send a user_id parameter — the
+     * server enforces ownership.
      */
-    suspend fun getSwipeStatus(userId: String): SwipeStatusDto? = withContext(Dispatchers.IO) {
+    suspend fun getSwipeStatus(): SwipeStatusDto? = withContext(Dispatchers.IO) {
         try {
-            val body = reqAdapter.toJson(mapOf("p_limit" to 1))
             val req = Request.Builder()
                 .url("${SupabaseConfig.REST_BASE}/rpc/get_swipe_status")
-                .post(body.toRequestBody(json))
+                .post("{}".toRequestBody(json))
                 .build()
             SupabaseClient.http.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@withContext null
                 val text = resp.body?.string().orEmpty()
-                moshi.adapter(SwipeStatusDto::class.java).fromJson(text)
+                swipeStatusAdapter.fromJson(text)
             }
         } catch (e: Exception) {
             null
@@ -770,12 +787,15 @@ object SupabaseRepository {
     }
 
     /**
-     * Returns the total unread-message count across all matches for the current
+     * Returns the total unread-message count across all matches for the given
      * user. Calls the `get_unread_message_count` SECURITY DEFINER RPC (the RPC
-     * itself enforces auth.uid() — we do not send a user_id param).
+     * itself enforces auth.uid() — the [userId] parameter is retained in the
+     * signature for caller clarity but is NOT sent in the body; the server
+     * resolves the caller from the JWT).
      */
-    suspend fun getUnreadMessageCount(): Int = withContext(Dispatchers.IO) {
+    suspend fun getUnreadMessageCount(userId: String): Int = withContext(Dispatchers.IO) {
         try {
+            // userId intentionally not serialised — RPC enforces auth.uid().
             val req = Request.Builder()
                 .url("${SupabaseConfig.REST_BASE}/rpc/get_unread_message_count")
                 .post("{}".toRequestBody(json))
@@ -861,30 +881,38 @@ object SupabaseRepository {
     // ---------- DTO → domain mapping ----------
 
     private fun SwipeDeckProfileDto.toDatingProfile(): DatingProfile {
-        val age = birthYear?.let { (2026 - it).coerceIn(18, 99) } ?: 25
+        // No hardcoded fallbacks — every field uses `.orEmpty()` / `0` so a
+        // profile with missing DB columns renders as empty strings instead of
+        // fabricated defaults (e.g. "Anonymous", "Nearby", "Libra") that would
+        // mislead users into thinking the data was real. Age uses the current
+        // year so the math stays correct as time passes (no hardcoded 2026).
+        val age = birthYear?.let { java.time.LocalDate.now().year - it } ?: 0
         return DatingProfile(
             id = id,
-            name = name ?: "Anonymous",
+            name = name.orEmpty(),
             age = age,
             isVerified = isVerified ?: false,
-            location = city ?: "Nearby",
+            location = city.orEmpty(),
             distanceKm = distanceKm ?: 0,
             bio = bio.orEmpty(),
             photos = photos.orEmpty(),
-            profession = profession ?: "",
-            lookingFor = lookingFor ?: "Long-term partner",
-            essentialsGender = gender ?: "Woman",
-            astrologyStar = zodiac ?: "Libra",
-            musicAnthem = anthem ?: "",
-            communicationStyle = communicationStyle ?: "Better in person",
-            loveStyle = loveStyle ?: "Quality time",
-            education = education ?: "",
-            drinking = drinking ?: "Not for me",
-            smoking = smoking ?: "Non-smoker",
-            workout = workout ?: "Sometimes",
-            pets = pets ?: "Pet-free",
-            prompts = prompts?.map { PromptItem(it.question.orEmpty(), it.answer.orEmpty()) } ?: emptyList(),
-            interests = interests ?: emptyList(),
+            profession = profession.orEmpty(),
+            lookingFor = lookingFor.orEmpty(),
+            essentialsGender = gender.orEmpty(),
+            astrologyStar = zodiac.orEmpty(),
+            musicAnthem = anthem.orEmpty(),
+            communicationStyle = communicationStyle.orEmpty(),
+            loveStyle = loveStyle.orEmpty(),
+            education = education.orEmpty(),
+            drinking = drinking.orEmpty(),
+            smoking = smoking.orEmpty(),
+            workout = workout.orEmpty(),
+            pets = pets.orEmpty(),
+            prompts = prompts
+                ?.map { PromptItem(it.question.orEmpty(), it.answer.orEmpty()) }
+                ?.filter { it.question.isNotBlank() || it.answer.isNotBlank() }
+                ?: emptyList(),
+            interests = interests.orEmpty(),
         )
     }
 

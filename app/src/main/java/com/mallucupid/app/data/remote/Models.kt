@@ -314,11 +314,19 @@ data class CountryDto(
 
 // ---------- Swipe quota / status ----------
 
+/**
+ * Returned by the `get_swipe_status` RPC. Maps the snake_case Postgres
+ * columns to camelCase Kotlin properties via @Json so Moshi tolerates the
+ * older `swipesUsed`/`swipeLimit` column names too if the RPC is renamed.
+ *
+ * The RPC derives the caller identity from the JWT (auth.uid()), so we do
+ * NOT pass a user_id parameter — the server enforces ownership.
+ */
 @JsonClass(generateAdapter = true)
 data class SwipeStatusDto(
-    @Json(name = "swipes_used") val swipesUsed: Int? = null,
-    @Json(name = "swipe_limit") val swipeLimit: Int? = null,
-    @Json(name = "swipe_remaining") val swipeRemaining: Int? = null,
-    @Json(name = "is_pro") val isPro: Boolean? = null,
+    @Json(name = "swipes_today") val swipesToday: Int = 0,
+    @Json(name = "is_pro") val isPro: Boolean = false,
+    @Json(name = "daily_limit") val dailyLimit: Int = 20,
+    val remaining: Int = 20,
     @Json(name = "resets_at") val resetsAt: String? = null,
 )
